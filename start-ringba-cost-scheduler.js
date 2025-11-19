@@ -5,10 +5,10 @@
  * 
  * This script starts a scheduler that runs the Ringba Cost Sync service
  * multiple times daily at:
- * - 9:04 PM IST
- * - 12:00 AM IST (00:00 - midnight)
- * - 3:00 AM IST
- * - 6:00 AM IST
+ * - 9:08 PM IST (21:08)
+ * - 12:08 AM IST (00:08 - midnight)
+ * - 3:08 AM IST (03:08)
+ * - 6:08 AM IST (06:08)
  * 
  * The service syncs cost changes from eLocal database to Ringba dashboard
  * for the past 10 days.
@@ -144,10 +144,10 @@ class RingbaCostScheduler {
     
     // Schedule configuration
     this.schedules = [
-      { name: 'Ringba Cost Sync - 9:04 PM', time: '21:04', cron: '4 21 * * *' },
-      { name: 'Ringba Cost Sync - 12:00 AM', time: '00:00', cron: '0 0 * * *' },
-      { name: 'Ringba Cost Sync - 3:00 AM', time: '03:00', cron: '0 3 * * *' },
-      { name: 'Ringba Cost Sync - 6:00 AM', time: '06:00', cron: '0 6 * * *' }
+      { name: 'Ringba Cost Sync - 9:08 PM', time: '21:08', cron: '8 21 * * *' },
+      { name: 'Ringba Cost Sync - 12:08 AM', time: '00:08', cron: '8 0 * * *' },
+      { name: 'Ringba Cost Sync - 3:08 AM', time: '03:08', cron: '8 3 * * *' },
+      { name: 'Ringba Cost Sync - 6:08 AM', time: '06:08', cron: '8 6 * * *' }
     ];
   }
   
@@ -385,10 +385,10 @@ const main = async () => {
   console.log('='.repeat(70));
   console.log('This scheduler runs the Ringba Cost Sync service');
   console.log('multiple times daily at:');
-  console.log('  - 9:04 PM IST');
-  console.log('  - 12:00 AM IST (00:00 - midnight)');
-  console.log('  - 3:00 AM IST');
-  console.log('  - 6:00 AM IST');
+  console.log('  - 9:08 PM IST (21:08)');
+  console.log('  - 12:08 AM IST (00:08 - midnight)');
+  console.log('  - 3:08 AM IST (03:08)');
+  console.log('  - 6:08 AM IST (06:08)');
   console.log('');
   console.log('The service syncs cost changes from eLocal database to Ringba');
   console.log('for the past 10 days.');

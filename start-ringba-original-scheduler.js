@@ -5,10 +5,10 @@
  * 
  * This script starts a scheduler that runs the Ringba Original Sync service
  * every 3 hours at:
- * - 9:00 PM IST (21:00)
- * - 12:00 AM IST (00:00 - midnight)
- * - 3:00 AM IST (03:00)
- * - 6:00 AM IST (06:00)
+ * - 9:04 PM IST (21:04)
+ * - 12:04 AM IST (00:04 - midnight)
+ * - 3:04 AM IST (03:04)
+ * - 6:04 AM IST (06:04)
  * 
  * The service fetches calls from Ringba for the past 10 days and saves them
  * to the ringba_calls table.
@@ -138,12 +138,12 @@ class RingbaOriginalScheduler {
     this.logFile = null;
     this.loggingEnabled = false;
     
-    // Schedule configuration - Every 3 hours: 9 PM, 12 AM, 3 AM, 6 AM IST
+    // Schedule configuration - Every 3 hours: 9:04 PM, 12:04 AM, 3:04 AM, 6:04 AM IST
     this.schedules = [
-      { name: 'Ringba Original Sync - 9:00 PM', time: '21:00', cron: '0 21 * * *' },
-      { name: 'Ringba Original Sync - 12:00 AM', time: '00:00', cron: '0 0 * * *' },
-      { name: 'Ringba Original Sync - 3:00 AM', time: '03:00', cron: '0 3 * * *' },
-      { name: 'Ringba Original Sync - 6:00 AM', time: '06:00', cron: '0 6 * * *' }
+      { name: 'Ringba Original Sync - 9:04 PM', time: '21:04', cron: '4 21 * * *' },
+      { name: 'Ringba Original Sync - 12:04 AM', time: '00:04', cron: '4 0 * * *' },
+      { name: 'Ringba Original Sync - 3:04 AM', time: '03:04', cron: '4 3 * * *' },
+      { name: 'Ringba Original Sync - 6:04 AM', time: '06:04', cron: '4 6 * * *' }
     ];
   }
   
@@ -381,10 +381,10 @@ const main = async () => {
   console.log('='.repeat(70));
   console.log('This scheduler runs the Ringba Original Sync service');
   console.log('every 3 hours at:');
-  console.log('  - 9:00 PM IST (21:00)');
-  console.log('  - 12:00 AM IST (00:00 - midnight)');
-  console.log('  - 3:00 AM IST (03:00)');
-  console.log('  - 6:00 AM IST (06:00)');
+  console.log('  - 9:04 PM IST (21:04)');
+  console.log('  - 12:04 AM IST (00:04 - midnight)');
+  console.log('  - 3:04 AM IST (03:04)');
+  console.log('  - 6:04 AM IST (06:04)');
   console.log('');
   console.log('The service fetches calls from Ringba for the current day only.');
   console.log('Timezone Logic: If time in IST is after 12 AM, it fetches previous day');
