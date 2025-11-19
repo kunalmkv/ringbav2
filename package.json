@@ -1,0 +1,42 @@
+{
+  "name": "ringbav2",
+  "version": "1.0.0",
+  "description": "eLocal scraping service for Ringba",
+  "type": "module",
+  "main": "src/services/elocal.scrapper.js",
+  "scripts": {
+    "setup:db": "node setup-database.js",
+    "test:service": "node test-service.js",
+    "test:historical": "node test-service.js historical",
+    "test:current": "node test-service.js current",
+    "test:historical-api": "node test-service.js historical-api",
+    "test:current-api": "node test-service.js current-api",
+    "scrape": "node run-scraper.js",
+    "sync:cost": "node run-ringba-cost-sync.js",
+    "scheduler": "node src/services/scheduler.js",
+    "scheduler:historical": "node start-historical-scheduler.js",
+    "scheduler:current": "node start-current-scheduler.js",
+    "scheduler:ringba-original": "node start-ringba-original-scheduler.js",
+    "scheduler:ringba-cost": "node start-ringba-cost-scheduler.js",
+    "start": "node src/services/scheduler.js"
+  },
+  "keywords": [
+    "scraping",
+    "elocal",
+    "ringba"
+  ],
+  "author": "",
+  "license": "ISC",
+  "dependencies": {
+    "cheerio": "1.0.0-rc.12",
+    "dotenv": "^16.0.0",
+    "fp-ts": "^2.16.1",
+    "node-cron": "^3.0.3",
+    "node-fetch": "^3.3.2",
+    "pg": "^8.11.0"
+  },
+  "engines": {
+    "node": ">=18.0.0"
+  }
+}
+

@@ -1,0 +1,116 @@
+{
+  "timezone": "Asia/Kolkata",
+  "services": [
+    {
+      "name": "Historical STATIC",
+      "type": "historical",
+      "category": "STATIC",
+      "enabled": true,
+      "schedule": {
+        "time": "23:58",
+        "timezone": "Asia/Kolkata",
+        "description": "Daily at 11:58 PM IST"
+      }
+    },
+    {
+      "name": "Historical API",
+      "type": "historical",
+      "category": "API",
+      "enabled": true,
+      "schedule": {
+        "time": "23:58",
+        "timezone": "Asia/Kolkata",
+        "description": "Daily at 11:58 PM IST"
+      }
+    },
+    {
+      "name": "Current STATIC - 9 PM",
+      "type": "current",
+      "category": "STATIC",
+      "enabled": true,
+      "schedule": {
+        "time": "21:00",
+        "timezone": "Asia/Kolkata",
+        "description": "Daily at 9:00 PM IST"
+      }
+    },
+    {
+      "name": "Current STATIC - 12 AM",
+      "type": "current",
+      "category": "STATIC",
+      "enabled": true,
+      "schedule": {
+        "time": "00:00",
+        "timezone": "Asia/Kolkata",
+        "description": "Daily at 12:00 AM IST (midnight)"
+      }
+    },
+    {
+      "name": "Current STATIC - 3 AM",
+      "type": "current",
+      "category": "STATIC",
+      "enabled": true,
+      "schedule": {
+        "time": "03:00",
+        "timezone": "Asia/Kolkata",
+        "description": "Daily at 3:00 AM IST"
+      }
+    },
+    {
+      "name": "Current STATIC - 6 AM",
+      "type": "current",
+      "category": "STATIC",
+      "enabled": true,
+      "schedule": {
+        "time": "06:00",
+        "timezone": "Asia/Kolkata",
+        "description": "Daily at 6:00 AM IST"
+      }
+    },
+    {
+      "name": "Current API - 9 PM",
+      "type": "current",
+      "category": "API",
+      "enabled": true,
+      "schedule": {
+        "time": "21:00",
+        "timezone": "Asia/Kolkata",
+        "description": "Daily at 9:00 PM IST"
+      }
+    },
+    {
+      "name": "Current API - 12 AM",
+      "type": "current",
+      "category": "API",
+      "enabled": true,
+      "schedule": {
+        "time": "00:00",
+        "timezone": "Asia/Kolkata",
+        "description": "Daily at 12:00 AM IST (midnight)"
+      }
+    },
+    {
+      "name": "Current API - 3 AM",
+      "type": "current",
+      "category": "API",
+      "enabled": true,
+      "schedule": {
+        "time": "03:00",
+        "timezone": "Asia/Kolkata",
+        "description": "Daily at 3:00 AM IST"
+      }
+    },
+    {
+      "name": "Current API - 6 AM",
+      "type": "current",
+      "category": "API",
+      "enabled": true,
+      "schedule": {
+        "time": "06:00",
+        "timezone": "Asia/Kolkata",
+        "description": "Daily at 6:00 AM IST"
+      }
+    }
+  ]
+}
+
