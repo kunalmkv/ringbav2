@@ -18,6 +18,7 @@
     "scheduler:current": "node start-current-scheduler.js",
     "scheduler:ringba-original": "node start-ringba-original-scheduler.js",
     "scheduler:ringba-cost": "node start-ringba-cost-scheduler.js",
+    "dashboard": "node dashboard-server.js",
     "start": "node src/services/scheduler.js"
   },
   "keywords": [
@@ -29,7 +30,9 @@
   "license": "ISC",
   "dependencies": {
     "cheerio": "1.0.0-rc.12",
+    "cors": "^2.8.5",
     "dotenv": "^16.0.0",
+    "express": "^4.21.2",
     "fp-ts": "^2.16.1",
     "node-cron": "^3.0.3",
     "node-fetch": "^3.3.2",
@@ -39,4 +42,3 @@
     "node": ">=18.0.0"
   }
 }
-

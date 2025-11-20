@@ -205,21 +205,34 @@ const getElocalCallsForMatching = async (db, startDate, endDate, category = null
 };
 
 // Match Ringba calls with eLocal calls and prepare updates
-// Uses same logic as ringba-cost-sync detectChanges function
+// Matching flow: 1) Target ID (category), 2) Caller ID, 3) Time (hour:minute only, ignore seconds)
+// IMPORTANT: Only updates if original_payout and original_revenue are NULL or 0
+// This preserves the original Ringba cost data that was already saved
 const matchAndPrepareUpdates = (ringbaCalls, elocalCalls) => {
   const updates = [];
   const unmatched = [];
+  const skipped = []; // Calls that already have original_payout/revenue values
   
-  // Group eLocal calls by normalized caller ID for faster lookup
-  const elocalCallsByCaller = new Map();
+  // Group eLocal calls by category first, then by normalized caller ID for faster lookup
+  // Structure: Map<category, Map<callerE164, Array<elocalCall>>>
+  const elocalCallsByCategoryAndCaller = new Map();
   for (const elocalCall of elocalCalls) {
+    const category = elocalCall.category || 'STATIC';
     const callerE164 = toE164(elocalCall.caller_id);
-    if (callerE164) {
-      if (!elocalCallsByCaller.has(callerE164)) {
-        elocalCallsByCaller.set(callerE164, []);
-      }
-      elocalCallsByCaller.get(callerE164).push(elocalCall);
+    
+    if (!callerE164) {
+      continue; // Skip calls without valid caller ID
     }
+    
+    if (!elocalCallsByCategoryAndCaller.has(category)) {
+      elocalCallsByCategoryAndCaller.set(category, new Map());
+    }
+    
+    const callsByCaller = elocalCallsByCategoryAndCaller.get(category);
+    if (!callsByCaller.has(callerE164)) {
+      callsByCaller.set(callerE164, []);
+    }
+    callsByCaller.get(callerE164).push(elocalCall);
   }
   
   // Track which eLocal calls have been matched
@@ -227,20 +240,35 @@ const matchAndPrepareUpdates = (ringbaCalls, elocalCalls) => {
   
   // Match each Ringba call
   for (const ringbaCall of ringbaCalls) {
+    // Step 1: Match by target ID (which corresponds to category)
+    const ringbaCategory = getCategoryFromTargetId(ringbaCall.targetId);
+    if (!ringbaCategory) {
+      unmatched.push({ ringbaCall, reason: `Invalid or unknown target ID: ${ringbaCall.targetId}` });
+      continue;
+    }
+    
+    // Step 2: Match by caller ID
     const callerE164 = ringbaCall.callerIdE164 || toE164(ringbaCall.callerId);
     if (!callerE164) {
       unmatched.push({ ringbaCall, reason: 'Invalid caller ID' });
       continue;
     }
     
-    const candidateElocalCalls = elocalCallsByCaller.get(callerE164) || [];
-    
-    if (candidateElocalCalls.length === 0) {
-      unmatched.push({ ringbaCall, reason: 'No matching eLocal call found' });
+    // Get eLocal calls for this category and caller ID
+    const categoryCalls = elocalCallsByCategoryAndCaller.get(ringbaCategory);
+    if (!categoryCalls) {
+      unmatched.push({ ringbaCall, reason: `No eLocal calls found for category: ${ringbaCategory}` });
       continue;
     }
     
-    // Find best match
+    const candidateElocalCalls = categoryCalls.get(callerE164) || [];
+    
+    if (candidateElocalCalls.length === 0) {
+      unmatched.push({ ringbaCall, reason: `No matching eLocal call found for category ${ringbaCategory} and caller ${callerE164}` });
+      continue;
+    }
+    
+    // Step 3: Find best match by time (hour:minute only, ignore seconds)
     let bestMatch = null;
     let bestScore = Infinity;
     
@@ -263,7 +291,27 @@ const matchAndPrepareUpdates = (ringbaCalls, elocalCalls) => {
     
     matchedElocalIds.add(bestMatch.elocalCall.id);
     
-    // Prepare update with Ringba payout and revenue
+    // Check if original_payout or original_revenue already exist (preserve original Ringba data)
+    // Only update if both are NULL or 0 (not already filled)
+    const existingOriginalPayout = Number(bestMatch.elocalCall.original_payout || 0);
+    const existingOriginalRevenue = Number(bestMatch.elocalCall.original_revenue || 0);
+    
+    // Skip update if either original_payout or original_revenue already has a value (not NULL and not 0)
+    // This preserves the original Ringba cost data that was already saved
+    if (existingOriginalPayout !== 0 || existingOriginalRevenue !== 0) {
+      // Data already exists, skip update to preserve original Ringba cost
+      skipped.push({
+        elocalCallId: bestMatch.elocalCall.id,
+        existingOriginalPayout: existingOriginalPayout,
+        existingOriginalRevenue: existingOriginalRevenue,
+        newPayout: ringbaCall.payout,
+        newRevenue: ringbaCall.revenue,
+        reason: 'original_payout or original_revenue already filled (preserving original Ringba cost)'
+      });
+      continue;
+    }
+    
+    // Prepare update with Ringba payout and revenue (only if not already filled)
     updates.push({
       elocalCallId: bestMatch.elocalCall.id,
       ringbaInboundCallId: ringbaCall.inboundCallId,
@@ -276,35 +324,17 @@ const matchAndPrepareUpdates = (ringbaCalls, elocalCalls) => {
     });
   }
   
-  return { updates, unmatched };
+  return { updates, unmatched, skipped };
 };
 
-// Match Ringba call with eLocal call (same logic as ringba-cost-sync)
-// Uses: caller ID (E.164), time range (±120 minutes), and payout (if available)
+// Match Ringba call with eLocal call
+// Matching flow: 1) Target ID (category) - already filtered, 2) Caller ID - already filtered, 3) Time (hour:minute only, ignore seconds)
+// Uses: time range (±120 minutes), and payout (if available)
 const matchCall = (ringbaCall, elocalCall, windowMinutes = 120, payoutTolerance = 0.01) => {
-  // 1. Match caller ID (convert both to E.164)
-  // eLocal caller_id might be in various formats (e.g., "(555) 123-4567", "5551234567", etc.)
-  // Ringba caller_id is already normalized to E.164 format (e.g., "+15551234567")
-  // Normalize both to E.164 for comparison
-  const elocalCallerE164 = toE164(elocalCall.caller_id);
-  const ringbaCallerE164 = ringbaCall.callerIdE164 || toE164(ringbaCall.callerId);
+  // Note: Caller ID matching is already done in matchAndPrepareUpdates
+  // This function only matches by time (hour:minute, ignore seconds) and payout
   
-  // Skip anonymous or invalid caller IDs
-  const elocalCallerLower = (elocalCall.caller_id || '').toLowerCase();
-  if (elocalCallerLower.includes('anonymous') || elocalCallerLower === '' || !elocalCall.caller_id) {
-    return null; // Can't match anonymous/invalid caller IDs
-  }
-  
-  if (!elocalCallerE164 || !ringbaCallerE164) {
-    return null; // Can't match without valid E.164 caller ID
-  }
-  
-  // Compare normalized E.164 formats
-  if (elocalCallerE164 !== ringbaCallerE164) {
-    return null; // Caller IDs don't match after normalization
-  }
-  
-  // 2. Match date and time
+  // Match date and time (only hour and minutes, ignore seconds)
   // eLocal dates are in EST timezone (stored as YYYY-MM-DDTHH:mm:ss)
   // Ringba dates are also in EST timezone (converted during fetch)
   const elocalDate = parseDate(elocalCall.date_of_call);
@@ -325,8 +355,14 @@ const matchCall = (ringbaCall, elocalCall, windowMinutes = 120, payoutTolerance 
     return null; // Dates are more than 1 day apart
   }
   
-  // Calculate time difference in minutes
-  const timeDiff = timeDiffMinutes(elocalDate, ringbaDate);
+  // Calculate time difference in minutes, but only using hour and minutes (ignore seconds)
+  // Set seconds to 0 for both dates before comparing
+  const elocalTimeOnly = new Date(elocalDate);
+  elocalTimeOnly.setSeconds(0, 0);
+  const ringbaTimeOnly = new Date(ringbaDate);
+  ringbaTimeOnly.setSeconds(0, 0);
+  
+  const timeDiff = timeDiffMinutes(elocalTimeOnly, ringbaTimeOnly);
   const effectiveWindow = daysDiff === 0 ? windowMinutes : (24 * 60); // 24 hours if different days
   
   if (timeDiff > effectiveWindow) {
@@ -413,15 +449,31 @@ export const syncRingbaOriginalPayout = async (config, dateRange, category = nul
   let updatedCount = 0;
   let failedCount = 0;
   let unmatchedCount = 0;
+  let skippedCount = 0;
   
   if (elocalCalls.length > 0 && ringbaCalls.length > 0) {
     console.log('[Step 4] Matching Ringba calls with eLocal calls...');
-    const { updates, unmatched } = matchAndPrepareUpdates(ringbaCalls, elocalCalls);
+    console.log(`[Step 4] Matching flow: 1) Target ID (category), 2) Caller ID, 3) Time (hour:minute only, ignore seconds)`);
+    const { updates, unmatched, skipped } = matchAndPrepareUpdates(ringbaCalls, elocalCalls);
     unmatchedCount = unmatched.length;
+    skippedCount = skipped.length;
     
     console.log(`[Step 4] ✅ Found ${updates.length} matches to update`);
     console.log(`         - Unmatched Ringba calls: ${unmatched.length}`);
+    console.log(`         - Skipped (already have original_payout/revenue): ${skipped.length}`);
     console.log('');
+    
+    // Log skipped calls (if any)
+    if (skipped.length > 0) {
+      console.log(`[Step 4] Skipped calls (preserving original Ringba cost):`);
+      skipped.forEach((item, index) => {
+        console.log(`         [${index + 1}] eLocal Call ID: ${item.elocalCallId}`);
+        console.log(`             - Existing: payout=$${item.existingOriginalPayout.toFixed(2)}, revenue=$${item.existingOriginalRevenue.toFixed(2)}`);
+        console.log(`             - New (not applied): payout=$${item.newPayout.toFixed(2)}, revenue=$${item.newRevenue.toFixed(2)}`);
+        console.log(`             - Reason: ${item.reason}`);
+      });
+      console.log('');
+    }
     
     // Update original_payout and original_revenue in elocal_call_data
     if (updates.length > 0) {
@@ -487,7 +539,8 @@ export const syncRingbaOriginalPayout = async (config, dateRange, category = nul
     matched: matchedCount,
     updatedOriginal: updatedCount,
     failed: failedCount,
-    unmatched: unmatchedCount
+    unmatched: unmatchedCount,
+    skipped: skippedCount
   };
   
   console.log('='.repeat(70));
@@ -502,6 +555,7 @@ export const syncRingbaOriginalPayout = async (config, dateRange, category = nul
   console.log(`eLocal Calls Fetched:      ${summary.elocalCalls}`);
   console.log(`Matches Found:            ${summary.matched}`);
   console.log(`  - Updated (original_*): ${summary.updatedOriginal}`);
+  console.log(`  - Skipped (preserved):   ${summary.skipped}`);
   console.log(`  - Failed:                ${summary.failed}`);
   console.log(`  - Unmatched:             ${summary.unmatched}`);
   console.log('='.repeat(70));

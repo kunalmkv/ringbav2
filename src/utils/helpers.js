@@ -18,16 +18,50 @@ export const processCampaignCalls = (rawCalls) => {
     return [];
   }
 
-  // Deduplicate based on callerId, dateOfCall, and category
+  // Deduplicate based on callerId, dateOfCall (full timestamp), and category
+  // IMPORTANT: Use full timestamp (not just date) to allow multiple calls per day
   const seen = new Map();
   const processed = [];
+  const timestampCounts = new Map(); // Track calls with same timestamp to add sequence
+
+  console.log(`[INFO] Processing ${rawCalls.length} raw calls for deduplication...`);
 
   for (const call of rawCalls) {
     // Normalize date+time to ISO format (YYYY-MM-DDTHH:mm:ss) before creating key
-    // Use date part only for deduplication key to allow multiple calls same day
-    const normalizedDateTime = normalizeDateTime(call.dateOfCall) || call.dateOfCall || '';
-    const datePart = normalizedDateTime.split('T')[0]; // Extract date part for key
-    const key = `${call.callerId}|${datePart}|${call.category || 'STATIC'}`;
+    // Use FULL timestamp for deduplication to allow multiple calls per day
+    let normalizedDateTime = normalizeDateTime(call.dateOfCall) || call.dateOfCall || '';
+    
+    // If normalization failed or returned empty, skip this call
+    if (!normalizedDateTime) {
+      console.warn(`[WARN] Skipping call with invalid date: ${call.dateOfCall} for caller ${call.callerId}`);
+      continue;
+    }
+    
+    // If eLocal doesn't provide seconds, default to :00
+    // But if multiple calls have the same timestamp down to the minute, we need to differentiate them
+    // Check if we already have a call with this exact timestamp
+    const baseKey = `${call.callerId}|${normalizedDateTime}|${call.category || 'STATIC'}`;
+    
+    // Check if we've already processed a call with this exact timestamp
+    // If so, increment the sequence counter and modify the timestamp
+    let count = timestampCounts.get(baseKey) || 0;
+    if (count > 0) {
+      // This is a duplicate with the same timestamp - we need to differentiate it
+      // Add sequence as seconds offset (1, 2, 3 seconds) to differentiate
+      // Parse the timestamp and add the sequence
+      const [datePart, timePart] = normalizedDateTime.split('T');
+      if (timePart) {
+        const [hours, minutes, seconds] = timePart.split(':');
+        const newSeconds = String((parseInt(seconds || '0', 10) + count) % 60).padStart(2, '0');
+        normalizedDateTime = `${datePart}T${hours}:${minutes}:${newSeconds}`;
+      }
+    }
+    
+    // Increment counter for this base timestamp (for next call with same timestamp)
+    timestampCounts.set(baseKey, count + 1);
+    
+    // Use full normalized timestamp (with sequence if needed) for deduplication key
+    const key = `${call.callerId}|${normalizedDateTime}|${call.category || 'STATIC'}`;
     
     if (!seen.has(key)) {
       seen.set(key, true);
@@ -35,7 +69,7 @@ export const processCampaignCalls = (rawCalls) => {
       // Normalize the call object with standardized date+time format
       const processedCall = {
         callerId: call.callerId || '',
-        dateOfCall: normalizedDateTime, // Use normalized date+time (YYYY-MM-DDTHH:mm:ss)
+        dateOfCall: normalizedDateTime, // Use normalized date+time (YYYY-MM-DDTHH:mm:ss) with sequence if needed
         campaignPhone: call.campaignPhone || '(877) 834-1273',
         payout: parseFloat(call.payout) || 0,
         category: call.category || 'STATIC',
@@ -49,7 +83,15 @@ export const processCampaignCalls = (rawCalls) => {
       };
 
       processed.push(processedCall);
+    } else {
+      // This exact combination already exists - log a warning
+      console.warn(`[WARN] Duplicate call skipped: ${call.callerId} at ${normalizedDateTime} (category: ${call.category || 'STATIC'})`);
     }
+  }
+
+  console.log(`[INFO] After deduplication: ${processed.length} unique calls (from ${rawCalls.length} raw calls)`);
+  if (processed.length < rawCalls.length) {
+    console.log(`[INFO] Removed ${rawCalls.length - processed.length} duplicate calls during processing`);
   }
 
   return processed;
