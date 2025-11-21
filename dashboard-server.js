@@ -323,9 +323,20 @@ app.get('*', (req, res) => {
   res.sendFile(join(DASHBOARD_BUILD_DIR, 'index.html'));
 });
 
-// Start server
-app.listen(PORT, () => {
-  console.log(`Dashboard server running on http://localhost:${PORT}`);
+// Start server - listen on all interfaces (0.0.0.0) to allow external connections
+app.listen(PORT, '0.0.0.0', () => {
+  console.log(`Dashboard server running on http://0.0.0.0:${PORT}`);
   console.log(`Serving static files from: ${DASHBOARD_BUILD_DIR}`);
+  console.log(`Database: ${process.env.POSTGRES_DB_NAME || process.env.DB_NAME || 'not configured'}`);
+  console.log(`Database Host: ${process.env.POSTGRES_HOST || process.env.DB_HOST || 'localhost'}`);
+  
+  // Test database connection
+  pool.query('SELECT NOW() as now')
+    .then(result => {
+      console.log(`✓ Database connection successful. Server time: ${result.rows[0].now}`);
+    })
+    .catch(err => {
+      console.error(`✗ Database connection failed:`, err.message);
+    });
 });
 
