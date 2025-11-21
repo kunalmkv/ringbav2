@@ -53,8 +53,25 @@ const fetchAPI = async (endpoint, options = {}) => {
   console.log('[Dashboard API] Fetching:', url);
   console.log('[Dashboard API] Options:', options);
   
+  // Add cache-busting headers and query parameter
+  const cacheBuster = `_t=${Date.now()}`;
+  const separator = url.includes('?') ? '&' : '?';
+  const urlWithCacheBuster = `${url}${separator}${cacheBuster}`;
+  
+  // Merge options with cache-control headers
+  const fetchOptions = {
+    ...options,
+    cache: 'no-store', // Prevent browser caching
+    headers: {
+      'Cache-Control': 'no-cache, no-store, must-revalidate',
+      'Pragma': 'no-cache',
+      'Expires': '0',
+      ...options.headers
+    }
+  };
+  
   try {
-    const response = await fetch(url, options);
+    const response = await fetch(urlWithCacheBuster, fetchOptions);
     console.log('[Dashboard API] Response status:', response.status);
     console.log('[Dashboard API] Response headers:', Object.fromEntries(response.headers.entries()));
     

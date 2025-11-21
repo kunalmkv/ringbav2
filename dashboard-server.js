@@ -41,11 +41,29 @@ app.use(cors({
 }));
 app.use(express.json());
 
+// Disable caching for all API routes
+app.use('/api', (req, res, next) => {
+  res.set({
+    'Cache-Control': 'no-store, no-cache, must-revalidate, private',
+    'Pragma': 'no-cache',
+    'Expires': '0',
+    'Last-Modified': new Date().toUTCString(),
+    'ETag': false
+  });
+  next();
+});
+
 // Serve static files from dashboard-build directory
 app.use(express.static(DASHBOARD_BUILD_DIR));
 
 // Helper to send JSON response
 const sendJSON = (res, data, statusCode = 200) => {
+  // Ensure no caching headers are set
+  res.set({
+    'Cache-Control': 'no-store, no-cache, must-revalidate, private',
+    'Pragma': 'no-cache',
+    'Expires': '0'
+  });
   res.status(statusCode).json(data);
 };
 
