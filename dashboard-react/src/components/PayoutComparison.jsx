@@ -121,6 +121,8 @@ const PayoutComparison = () => {
               <th colSpan="2" className="col-group">E-Local</th>
               <th rowSpan="2" className="col-total">Ringba Total</th>
               <th rowSpan="2" className="col-total">Elocal Total</th>
+              <th rowSpan="2" className="col-amount">Raw Call</th>
+              <th rowSpan="2" className="col-amount">RPC</th>
               <th colSpan="4" className="col-group">Revenue</th>
             </tr>
             <tr>
@@ -137,7 +139,7 @@ const PayoutComparison = () => {
           <tbody>
             {data.length === 0 ? (
               <tr>
-                <td colSpan="11" className="no-data">No data available</td>
+                <td colSpan="13" className="no-data">No data available</td>
               </tr>
             ) : (
               data.map((row, index) => (
@@ -149,6 +151,8 @@ const PayoutComparison = () => {
                   <td className="col-amount">{formatCurrency(row.elocal_api)}</td>
                   <td className="col-amount">{formatCurrency(row.ringba_total)}</td>
                   <td className="col-amount">{formatCurrency(row.elocal_total)}</td>
+                  <td className="col-amount">{row.total_calls || 0}</td>
+                  <td className="col-amount">{formatCurrency(row.rpc)}</td>
                   <td className={`col-amount ${row.adjustments < 0 ? 'negative' : row.adjustments > 0 ? 'positive' : ''}`}>
                     {formatCurrency(row.adjustments)}
                   </td>

@@ -87,12 +87,6 @@ const getCallsByCampaignId = async (accountId, apiToken, campaignId, startDate, 
         ? Number(record.payoutAmount) 
         : 0;
       
-      // Routing cost: Currently using payout as routing cost
-      // Note: Ringba's routing cost might be different from payout
-      // If a specific routing cost column becomes available, update this logic
-      // For now, routing cost = payout (what we pay to Ringba for the call)
-      const routingCost = payout;
-      
       const call = {
         inboundCallId: record.inboundCallId || null,
         callDate: record.callDt || null,
@@ -102,7 +96,6 @@ const getCallsByCampaignId = async (accountId, apiToken, campaignId, startDate, 
         campaignName: record.campaignName || null,
         revenue: revenue,
         payout: payout,
-        routingCost: routingCost, // Ringba routing cost (currently = payout)
         callDuration: null, // callDuration not available in this API endpoint
         inboundPhoneNumber: record.inboundPhoneNumber || null,
         callerId: record['tag:InboundNumber:Number'] || null,
@@ -175,11 +168,6 @@ const fetchCampaignSummary = async (accountId, apiToken, identifier, identifierN
     const totalCalls = calls.length;
     const totalRevenue = calls.reduce((sum, call) => sum + (call.revenue || 0), 0);
     const totalPayout = calls.reduce((sum, call) => sum + (call.payout || 0), 0);
-    // Sum routing cost (Ringba's routing cost)
-    const totalRoutingCost = calls.reduce((sum, call) => {
-      const routingCost = call.routingCost || call.ringbaCost || 0;
-      return sum + (routingCost && !isNaN(routingCost) ? Number(routingCost) : 0);
-    }, 0);
     // Sum call duration (handle null/undefined values)
     const totalCallDuration = calls.reduce((sum, call) => {
       const duration = call.callDuration;
@@ -231,10 +219,8 @@ const fetchCampaignSummary = async (accountId, apiToken, identifier, identifierN
       return duration && duration > 0 && !hasRevenue;
     }).length;
     
-    // Total cost is the routing cost (Ringba's cost for routing calls)
-    // Currently using payout as routing cost since specific routing cost column is not available in API
-    // This represents what we pay to Ringba for routing the calls
-    const totalCost = totalRoutingCost > 0 ? totalRoutingCost : totalPayout;
+    // Total cost is typically the payout amount
+    const totalCost = totalPayout;
     
     // Get campaign name from first call or use provided name
     const campaignName = calls.length > 0 && calls[0].campaignName 
@@ -258,7 +244,7 @@ const fetchCampaignSummary = async (accountId, apiToken, identifier, identifierN
       rpc: parseFloat(rpc.toFixed(2)),
       totalCallLengthSeconds: totalCallDuration,
       averageCallLengthSeconds: parseFloat(averageCallLength.toFixed(2)),
-      totalCost: parseFloat(totalCost.toFixed(3)), // Total Cost shows 3 decimals in screenshot
+      totalCost: parseFloat(totalCost.toFixed(2)),
       noConnections: noConnections,
       duplicates: duplicates,
       blocked: blocked,
@@ -388,7 +374,6 @@ const createCombinedSummary = (allSummaries, targetDate) => {
     combined.revenue += summary.revenue || 0;
     combined.payout += summary.payout || 0;
     combined.totalCallLengthSeconds += summary.totalCallLengthSeconds || 0;
-    // Sum routing costs (total cost from Ringba)
     combined.totalCost += summary.totalCost || 0;
     combined.noConnections += summary.noConnections || 0;
     combined.duplicates += summary.duplicates || 0;
@@ -490,7 +475,6 @@ export const syncCampaignSummaryByCampaignId = async (config, campaignId, date =
     console.log(`Profit: $${summary.profit}`);
     console.log(`Margin: ${summary.margin}%`);
     console.log(`Conversion Rate: ${summary.conversionRate}%`);
-    console.log(`Total Routing Cost: $${summary.totalCost.toFixed(3)}`);
     console.log('='.repeat(70));
     console.log('');
     
