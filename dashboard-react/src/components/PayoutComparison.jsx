@@ -36,11 +36,32 @@ const PayoutComparison = () => {
     setLoading(true);
     setError(null);
     try {
+      console.log('[PayoutComparison] Fetching data...', { startDate, endDate });
       const result = await api.payoutComparison(startDate || null, endDate || null);
-      setData(result.data || []);
+      console.log('[PayoutComparison] API Response:', result);
+      console.log('[PayoutComparison] Data array:', result?.data);
+      console.log('[PayoutComparison] Data length:', result?.data?.length);
+      
+      if (!result) {
+        console.error('[PayoutComparison] No result returned from API');
+        setError('No data returned from server');
+        setData([]);
+      } else if (!result.data) {
+        console.error('[PayoutComparison] Result has no data property:', result);
+        setError('Invalid response format from server');
+        setData([]);
+      } else {
+        setData(result.data || []);
+      }
     } catch (err) {
-      console.error('Error fetching payout comparison:', err);
-      setError(err.message);
+      console.error('[PayoutComparison] Error fetching payout comparison:', err);
+      console.error('[PayoutComparison] Error details:', {
+        message: err.message,
+        stack: err.stack,
+        name: err.name
+      });
+      setError(err.message || 'Failed to fetch data');
+      setData([]);
     } finally {
       setLoading(false);
     }

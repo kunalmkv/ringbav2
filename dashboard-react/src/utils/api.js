@@ -50,16 +50,37 @@ console.log('[Dashboard] Current origin:', window.location.origin);
 // Fetch wrapper with error handling
 const fetchAPI = async (endpoint, options = {}) => {
   const url = `${API_BASE_URL}${endpoint}`;
-  console.log('[Dashboard] Fetching:', url);
+  console.log('[Dashboard API] Fetching:', url);
+  console.log('[Dashboard API] Options:', options);
   
   try {
     const response = await fetch(url, options);
+    console.log('[Dashboard API] Response status:', response.status);
+    console.log('[Dashboard API] Response headers:', Object.fromEntries(response.headers.entries()));
+    
     if (!response.ok) {
-      throw new Error(`HTTP ${response.status}: ${response.statusText}`);
+      const errorText = await response.text();
+      console.error('[Dashboard API] Error response:', errorText);
+      throw new Error(`HTTP ${response.status}: ${response.statusText} - ${errorText}`);
     }
-    return await response.json();
+    
+    const contentType = response.headers.get('content-type');
+    if (!contentType || !contentType.includes('application/json')) {
+      const text = await response.text();
+      console.error('[Dashboard API] Non-JSON response:', text);
+      throw new Error(`Expected JSON but got ${contentType}`);
+    }
+    
+    const data = await response.json();
+    console.log('[Dashboard API] Parsed JSON data:', data);
+    return data;
   } catch (error) {
-    console.error('[Dashboard] API Error:', error);
+    console.error('[Dashboard API] Fetch error:', error);
+    console.error('[Dashboard API] Error details:', {
+      message: error.message,
+      stack: error.stack,
+      name: error.name
+    });
     throw error;
   }
 };
