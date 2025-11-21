@@ -31,35 +31,31 @@ const PayoutComparison = () => {
     return `${num.toFixed(2)}%`;
   };
 
-  // Fetch data
+  // Fetch data - Simplified
   const fetchData = async () => {
     setLoading(true);
     setError(null);
     try {
       console.log('[PayoutComparison] Fetching data...', { startDate, endDate });
       const result = await api.payoutComparison(startDate || null, endDate || null);
-      console.log('[PayoutComparison] API Response:', result);
-      console.log('[PayoutComparison] Data array:', result?.data);
-      console.log('[PayoutComparison] Data length:', result?.data?.length);
+      console.log('[PayoutComparison] Full API Response:', result);
       
-      if (!result) {
-        console.error('[PayoutComparison] No result returned from API');
-        setError('No data returned from server');
-        setData([]);
-      } else if (!result.data) {
-        console.error('[PayoutComparison] Result has no data property:', result);
-        setError('Invalid response format from server');
+      // Direct access to data array
+      const dataArray = result?.data || [];
+      console.log('[PayoutComparison] Data array length:', dataArray.length);
+      
+      if (dataArray.length > 0) {
+        console.log('[PayoutComparison] First record:', dataArray[0]);
+      }
+      
+      if (dataArray.length === 0) {
+        console.warn('[PayoutComparison] No data returned from API');
         setData([]);
       } else {
-        setData(result.data || []);
+        setData(dataArray);
       }
     } catch (err) {
-      console.error('[PayoutComparison] Error fetching payout comparison:', err);
-      console.error('[PayoutComparison] Error details:', {
-        message: err.message,
-        stack: err.stack,
-        name: err.name
-      });
+      console.error('[PayoutComparison] Error:', err);
       setError(err.message || 'Failed to fetch data');
       setData([]);
     } finally {
