@@ -242,12 +242,29 @@ app.get('/api/payout-comparison', async (req, res) => {
     // Sort by date descending
     processedData.sort((a, b) => new Date(b.date) - new Date(a.date));
     
-    sendJSON(res, {
+    // Log response before sending
+    console.log(`[Dashboard API] Sending response: ${processedData.length} records`);
+    if (processedData.length > 0) {
+      console.log(`[Dashboard API] Sample record:`, processedData[0]);
+    } else {
+      console.log(`[Dashboard API] WARNING: No data to return. Query returned ${result.rows.length} rows from database.`);
+    }
+    
+    const response = {
       data: processedData,
       total: processedData.length
+    };
+    
+    console.log(`[Dashboard API] Response structure:`, {
+      hasData: !!response.data,
+      dataLength: response.data?.length,
+      total: response.total
     });
+    
+    sendJSON(res, response);
   } catch (error) {
     console.error('[ERROR] Failed to fetch payout comparison:', error);
+    console.error('[ERROR] Error stack:', error.stack);
     sendError(res, error.message);
   }
 });
