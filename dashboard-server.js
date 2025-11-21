@@ -33,7 +33,12 @@ pool.on('error', (err) => {
 const app = express();
 
 // Middleware
-app.use(cors());
+// Configure CORS to allow requests from any origin (for production deployment)
+app.use(cors({
+  origin: '*', // Allow all origins - adjust in production if needed
+  methods: ['GET', 'POST', 'PUT', 'DELETE', 'OPTIONS'],
+  allowedHeaders: ['Content-Type', 'Authorization']
+}));
 app.use(express.json());
 
 // Serve static files from dashboard-build directory

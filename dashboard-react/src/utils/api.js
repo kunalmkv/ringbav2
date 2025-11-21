@@ -4,11 +4,48 @@ const getBasePath = () => {
   return '';
 };
 
+// Get API base URL
+// Priority:
+// 1. window.API_BASE_URL (set in index.html before app loads)
+// 2. VITE_API_URL environment variable (set during build)
+// 3. Auto-detect: if not localhost, use same hostname with port 3000
+// 4. Default: use current origin (for development)
+const getApiBaseUrl = () => {
+  // Check for window.API_BASE_URL (can be set in index.html via script tag)
+  if (typeof window !== 'undefined' && window.API_BASE_URL) {
+    console.log('[Dashboard] Using window.API_BASE_URL:', window.API_BASE_URL);
+    return window.API_BASE_URL;
+  }
+  
+  // Check for environment variable (set during build)
+  if (import.meta.env.VITE_API_URL) {
+    console.log('[Dashboard] Using VITE_API_URL:', import.meta.env.VITE_API_URL);
+    return import.meta.env.VITE_API_URL;
+  }
+  
+  // Auto-detect: if served from a server (not localhost), assume backend is on port 3000
+  const hostname = window.location.hostname;
+  const isLocalhost = hostname === 'localhost' || hostname === '127.0.0.1' || hostname === '';
+  
+  if (!isLocalhost) {
+    // Production: assume backend is on same host, port 3000
+    const apiUrl = `${window.location.protocol}//${hostname}:3000`;
+    console.log('[Dashboard] Auto-detected API URL (production):', apiUrl);
+    return apiUrl;
+  }
+  
+  // Development: use current origin
+  const devUrl = window.location.origin + getBasePath();
+  console.log('[Dashboard] Using current origin (development):', devUrl);
+  return devUrl;
+};
+
 export const BASE_PATH = getBasePath();
-export const API_BASE_URL = window.location.origin + BASE_PATH;
+export const API_BASE_URL = getApiBaseUrl();
 
 console.log('[Dashboard] Base path:', BASE_PATH);
 console.log('[Dashboard] API base URL:', API_BASE_URL);
+console.log('[Dashboard] Current origin:', window.location.origin);
 
 // Fetch wrapper with error handling
 const fetchAPI = async (endpoint, options = {}) => {
