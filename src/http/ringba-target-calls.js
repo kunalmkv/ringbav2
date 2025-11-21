@@ -110,6 +110,9 @@ export const getCallsByTargetId = (accountId, apiToken) => (targetId, options = 
             { column: 'targetId' },
             { column: 'conversionAmount' },  // Revenue
             { column: 'payoutAmount' },      // Payout (this is what we pay to Ringba - the cost)
+            { column: 'routingCost' },       // Routing cost (Ringba's cost)
+            { column: 'totalCost' },          // Total cost (alternative column name)
+            { column: 'cost' },               // Cost (alternative column name)
             { column: 'inboundPhoneNumber' },
             { column: 'tag:InboundNumber:Number' }, // Caller ID
             { column: 'campaignName' },
@@ -158,13 +161,18 @@ export const getCallsByTargetId = (accountId, apiToken) => (targetId, options = 
             ? Number(record.payoutAmount) 
             : 0;
           
+          // Get routing cost from various possible column names
+          const routingCost = record.routingCost !== undefined && record.routingCost !== null
+            ? Number(record.routingCost)
+            : record.totalCost !== undefined && record.totalCost !== null
+            ? Number(record.totalCost)
+            : record.cost !== undefined && record.cost !== null
+            ? Number(record.cost)
+            : 0; // Default to 0 if not available
+          
           // Ringba cost is what Ringba charges us for the call
-          // In Ringba's model: payoutAmount is what we pay to the publisher/affiliate
-          // The cost to us (Ringba's charge) is typically the payoutAmount itself
-          // However, if there's a difference between revenue and payout, that might be Ringba's margin
-          // For now, we'll use payoutAmount as the Ringba cost (what we pay)
-          // Note: This is the cost incurred/charged by Ringba for this call
-          const ringbaCost = payout; // Payout is the cost we pay to Ringba
+          // Use routing cost if available, otherwise fall back to payout
+          const ringbaCost = routingCost > 0 ? routingCost : payout;
           
           const call = {
             inboundCallId: record.inboundCallId || null,
@@ -173,7 +181,8 @@ export const getCallsByTargetId = (accountId, apiToken) => (targetId, options = 
             targetName: record.targetName || targetName,
             revenue: revenue,
             payout: payout,
-            ringbaCost: ringbaCost, // Cost charged by Ringba (what we pay for this call)
+            routingCost: routingCost, // Routing cost from Ringba
+            ringbaCost: ringbaCost, // Cost charged by Ringba (routing cost or payout)
             connected: null, // Not available in API response
             callDuration: record.callDuration ? Number(record.callDuration) : null,
             inboundPhoneNumber: record.inboundPhoneNumber || null,

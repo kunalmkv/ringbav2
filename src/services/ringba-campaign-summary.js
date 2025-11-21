@@ -1,0 +1,658 @@
+// Service to fetch and save Ringba campaign summary data
+// Tracks RPC (Revenue Per Call) and total calls per day per campaign
+
+import { dbOps } from '../database/postgres-operations.js';
+import { getCallsByTargetId } from '../http/ringba-target-calls.js';
+import { TARGET_IDS } from '../http/ringba-target-calls.js';
+import * as TE from 'fp-ts/lib/TaskEither.js';
+import * as T from 'fp-ts/lib/Task.js';
+import * as E from 'fp-ts/lib/Either.js';
+import fetch from 'node-fetch';
+
+const RINGBA_BASE_URL = 'https://api.ringba.com/v2';
+
+/**
+ * Fetch calls by campaign ID from Ringba API
+ */
+const getCallsByCampaignId = async (accountId, apiToken, campaignId, startDate, endDate) => {
+  const allCalls = [];
+  let offset = 0;
+  const pageSize = 1000;
+  let hasMore = true;
+  
+  while (hasMore) {
+    const url = `${RINGBA_BASE_URL}/${accountId}/calllogs`;
+    const headers = {
+      'Authorization': `Token ${apiToken}`,
+      'Content-Type': 'application/json'
+    };
+    
+    const body = {
+      reportStart: startDate.toISOString(),
+      reportEnd: endDate.toISOString(),
+      offset: offset,
+      size: pageSize,
+      orderByColumns: [
+        { column: 'callDt', direction: 'desc' }
+      ],
+      valueColumns: [
+        { column: 'inboundCallId' },
+        { column: 'callDt' },
+        { column: 'targetName' },
+        { column: 'targetId' },
+        { column: 'conversionAmount' },  // Revenue
+        { column: 'payoutAmount' },      // Payout
+        { column: 'inboundPhoneNumber' },
+        { column: 'tag:InboundNumber:Number' }, // Caller ID
+        { column: 'campaignName' },
+        { column: 'campaignId' },
+        { column: 'publisherName' }
+      ],
+      filters: [
+        {
+          anyConditionToMatch: [
+            {
+              column: 'campaignId',
+              comparisonType: 'EQUALS',
+              value: campaignId,
+              isNegativeMatch: false
+            }
+          ]
+        }
+      ],
+      formatDateTime: true
+    };
+    
+    const response = await fetch(url, {
+      method: 'POST',
+      headers,
+      body: JSON.stringify(body)
+    });
+    
+    if (!response.ok) {
+      const errorText = await response.text().catch(() => 'Unable to read error response');
+      throw new Error(`Ringba API error ${response.status}: ${errorText}`);
+    }
+    
+    const data = await response.json();
+    const records = data.report?.records || [];
+    const totalCount = data.report?.totalCount || data.report?.total || records.length;
+    
+    // Process records
+    for (const record of records) {
+      const revenue = record.conversionAmount !== undefined && record.conversionAmount !== null 
+        ? Number(record.conversionAmount) 
+        : 0;
+      const payout = record.payoutAmount !== undefined && record.payoutAmount !== null 
+        ? Number(record.payoutAmount) 
+        : 0;
+      
+      // Routing cost: Currently using payout as routing cost
+      // Note: Ringba's routing cost might be different from payout
+      // If a specific routing cost column becomes available, update this logic
+      // For now, routing cost = payout (what we pay to Ringba for the call)
+      const routingCost = payout;
+      
+      const call = {
+        inboundCallId: record.inboundCallId || null,
+        callDate: record.callDt || null,
+        targetId: record.targetId || null,
+        targetName: record.targetName || null,
+        campaignId: record.campaignId || campaignId,
+        campaignName: record.campaignName || null,
+        revenue: revenue,
+        payout: payout,
+        routingCost: routingCost, // Ringba routing cost (currently = payout)
+        callDuration: null, // callDuration not available in this API endpoint
+        inboundPhoneNumber: record.inboundPhoneNumber || null,
+        callerId: record['tag:InboundNumber:Number'] || null,
+        publisherName: record.publisherName || null
+      };
+      
+      allCalls.push(call);
+    }
+    
+    // Check if there are more records
+    if (records.length < pageSize || allCalls.length >= totalCount) {
+      hasMore = false;
+    } else {
+      offset += pageSize;
+    }
+    
+    // Add a small delay to avoid rate limiting
+    if (hasMore) {
+      await new Promise(resolve => setTimeout(resolve, 100));
+    }
+  }
+  
+  return allCalls;
+};
+
+/**
+ * Fetch campaign summary for a specific date from Ringba API
+ * Aggregates call data to calculate RPC, total calls, revenue, payout, etc.
+ * Can fetch by campaignId or targetId
+ */
+const fetchCampaignSummary = async (accountId, apiToken, identifier, identifierName, date, useCampaignId = false) => {
+  try {
+    // Set date range to cover the entire day (start of day to end of day)
+    const startDate = new Date(date);
+    startDate.setHours(0, 0, 0, 0);
+    
+    const endDate = new Date(date);
+    endDate.setHours(23, 59, 59, 999);
+    
+    console.log(`[Campaign Summary] Fetching data for ${identifierName} on ${date.toISOString().split('T')[0]}`);
+    console.log(`[Campaign Summary] Date range: ${startDate.toISOString()} to ${endDate.toISOString()}`);
+    
+    let calls = [];
+    
+    if (useCampaignId) {
+      // Fetch by campaign ID
+      console.log(`[Campaign Summary] Fetching by Campaign ID: ${identifier}`);
+      calls = await getCallsByCampaignId(accountId, apiToken, identifier, startDate, endDate);
+    } else {
+      // Fetch by target ID (existing method)
+      const getCalls = getCallsByTargetId(accountId, apiToken);
+      const resultEither = await getCalls(identifier, {
+        startDate: startDate,
+        endDate: endDate,
+        pageSize: 1000
+      })();
+      
+      if (resultEither._tag === 'Left') {
+        const error = resultEither.left;
+        throw new Error(`Failed to fetch calls: ${error.message}`);
+      }
+      
+      const result = resultEither.right;
+      calls = result.calls || [];
+    }
+    
+    console.log(`[Campaign Summary] Retrieved ${calls.length} calls for ${identifierName}`);
+    
+    // Calculate summary metrics
+    const totalCalls = calls.length;
+    const totalRevenue = calls.reduce((sum, call) => sum + (call.revenue || 0), 0);
+    const totalPayout = calls.reduce((sum, call) => sum + (call.payout || 0), 0);
+    // Sum routing cost (Ringba's routing cost)
+    const totalRoutingCost = calls.reduce((sum, call) => {
+      const routingCost = call.routingCost || call.ringbaCost || 0;
+      return sum + (routingCost && !isNaN(routingCost) ? Number(routingCost) : 0);
+    }, 0);
+    // Sum call duration (handle null/undefined values)
+    const totalCallDuration = calls.reduce((sum, call) => {
+      const duration = call.callDuration;
+      return sum + (duration && !isNaN(duration) ? Number(duration) : 0);
+    }, 0);
+    
+    // Calculate RPC (Revenue Per Call)
+    const rpc = totalCalls > 0 ? totalRevenue / totalCalls : 0;
+    
+    // Calculate Average Call Length (ACL) in seconds
+    const averageCallLength = totalCalls > 0 ? totalCallDuration / totalCalls : 0;
+    
+    // Calculate profit (Revenue - Payout)
+    const profit = totalRevenue - totalPayout;
+    
+    // Calculate margin percentage
+    const margin = totalRevenue > 0 ? (profit / totalRevenue) * 100 : 0;
+    
+    // Calculate conversion rate (calls with revenue / total calls)
+    const callsWithRevenue = calls.filter(call => call.revenue > 0).length;
+    const conversionRate = totalCalls > 0 ? (callsWithRevenue / totalCalls) * 100 : 0;
+    
+    // Count other metrics
+    // No connections: calls with no duration or zero duration (or no revenue)
+    const noConnections = calls.filter(call => {
+      const duration = call.callDuration;
+      const hasRevenue = call.revenue > 0;
+      return (!duration || duration === 0 || isNaN(duration)) && !hasRevenue;
+    }).length;
+    
+    // Duplicates: calls with same caller ID on the same day
+    // Count how many caller IDs appear more than once
+    const callerIdCounts = {};
+    calls.forEach(call => {
+      const callerId = call.callerId || call.inboundPhoneNumber;
+      if (callerId) {
+        callerIdCounts[callerId] = (callerIdCounts[callerId] || 0) + 1;
+      }
+    });
+    const duplicates = Object.values(callerIdCounts).filter(count => count > 1).reduce((sum, count) => sum + (count - 1), 0);
+    
+    // Blocked: would need to be available in API response (defaulting to 0)
+    const blocked = 0;
+    
+    // IVR Handled: calls that went through IVR (might be calls with duration but no conversion)
+    const ivrHandled = calls.filter(call => {
+      const duration = call.callDuration;
+      const hasRevenue = call.revenue > 0;
+      return duration && duration > 0 && !hasRevenue;
+    }).length;
+    
+    // Total cost is the routing cost (Ringba's cost for routing calls)
+    // Currently using payout as routing cost since specific routing cost column is not available in API
+    // This represents what we pay to Ringba for routing the calls
+    const totalCost = totalRoutingCost > 0 ? totalRoutingCost : totalPayout;
+    
+    // Get campaign name from first call or use provided name
+    const campaignName = calls.length > 0 && calls[0].campaignName 
+      ? calls[0].campaignName 
+      : identifierName || 'Unknown Campaign';
+    
+    // Get target name from first call if available
+    const targetName = calls.length > 0 && calls[0].targetName 
+      ? calls[0].targetName 
+      : identifierName;
+    
+    const summary = {
+      campaignName: campaignName,
+      targetId: useCampaignId ? (calls.length > 0 ? calls[0].targetId : null) : identifier,
+      targetName: targetName,
+      campaignId: useCampaignId ? identifier : null,
+      summaryDate: date.toISOString().split('T')[0], // YYYY-MM-DD format
+      totalCalls: totalCalls,
+      revenue: parseFloat(totalRevenue.toFixed(2)),
+      payout: parseFloat(totalPayout.toFixed(2)),
+      rpc: parseFloat(rpc.toFixed(2)),
+      totalCallLengthSeconds: totalCallDuration,
+      averageCallLengthSeconds: parseFloat(averageCallLength.toFixed(2)),
+      totalCost: parseFloat(totalCost.toFixed(3)), // Total Cost shows 3 decimals in screenshot
+      noConnections: noConnections,
+      duplicates: duplicates,
+      blocked: blocked,
+      ivrHandled: ivrHandled,
+      profit: parseFloat(profit.toFixed(2)),
+      margin: parseFloat(margin.toFixed(2)),
+      conversionRate: parseFloat(conversionRate.toFixed(2))
+    };
+    
+    console.log(`[Campaign Summary] Calculated summary for ${targetName}:`);
+    console.log(`  - Total Calls: ${summary.totalCalls}`);
+    console.log(`  - Revenue: $${summary.revenue}`);
+    console.log(`  - Payout: $${summary.payout}`);
+    console.log(`  - RPC: $${summary.rpc}`);
+    console.log(`  - Profit: $${summary.profit}`);
+    console.log(`  - Margin: ${summary.margin}%`);
+    console.log(`  - Conversion Rate: ${summary.conversionRate}%`);
+    
+    return summary;
+  } catch (error) {
+    console.error(`[Campaign Summary] Error fetching summary for ${identifierName}:`, error.message);
+    throw error;
+  }
+};
+
+/**
+ * Save campaign summary to database
+ */
+const saveCampaignSummary = async (db, summary) => {
+  try {
+    const query = `
+      INSERT INTO ringba_campaign_summary (
+        campaign_name, campaign_id, target_id, target_name, summary_date,
+        total_calls, revenue, payout, rpc,
+        total_call_length_seconds, average_call_length_seconds, total_cost,
+        no_connections, duplicates, blocked, ivr_handled,
+        profit, margin, conversion_rate
+      ) VALUES (
+        $1, $2, $3, $4, $5, $6, $7, $8, $9, $10, $11, $12, $13, $14, $15, $16, $17, $18, $19
+      )
+      ON CONFLICT (campaign_name, summary_date)
+      DO UPDATE SET
+        campaign_id = EXCLUDED.campaign_id,
+        target_id = EXCLUDED.target_id,
+        target_name = EXCLUDED.target_name,
+        total_calls = EXCLUDED.total_calls,
+        revenue = EXCLUDED.revenue,
+        payout = EXCLUDED.payout,
+        rpc = EXCLUDED.rpc,
+        total_call_length_seconds = EXCLUDED.total_call_length_seconds,
+        average_call_length_seconds = EXCLUDED.average_call_length_seconds,
+        total_cost = EXCLUDED.total_cost,
+        no_connections = EXCLUDED.no_connections,
+        duplicates = EXCLUDED.duplicates,
+        blocked = EXCLUDED.blocked,
+        ivr_handled = EXCLUDED.ivr_handled,
+        profit = EXCLUDED.profit,
+        margin = EXCLUDED.margin,
+        conversion_rate = EXCLUDED.conversion_rate,
+        updated_at = CURRENT_TIMESTAMP
+      RETURNING id
+    `;
+    
+    const params = [
+      summary.campaignName,
+      summary.campaignId || null,
+      summary.targetId || null,
+      summary.targetName,
+      summary.summaryDate,
+      summary.totalCalls,
+      summary.revenue,
+      summary.payout,
+      summary.rpc,
+      summary.totalCallLengthSeconds,
+      summary.averageCallLengthSeconds,
+      summary.totalCost,
+      summary.noConnections,
+      summary.duplicates,
+      summary.blocked,
+      summary.ivrHandled,
+      summary.profit,
+      summary.margin,
+      summary.conversionRate
+    ];
+    
+    const result = await db.pool.query(query, params);
+    const savedId = result.rows[0].id;
+    
+    console.log(`[Campaign Summary] Saved summary to database (ID: ${savedId})`);
+    return savedId;
+  } catch (error) {
+    console.error('[Campaign Summary] Error saving summary to database:', error.message);
+    throw error;
+  }
+};
+
+/**
+ * Create combined summary from all campaigns
+ * Aggregates all targets into a single "Appliance Repair" summary
+ */
+const createCombinedSummary = (allSummaries, targetDate) => {
+  // Aggregate all metrics
+  const combined = {
+    campaignName: 'Appliance Repair', // Combined campaign name as per screenshot
+    targetId: null, // Combined summary has no single target
+    targetName: 'Appliance Repair',
+    summaryDate: targetDate.toISOString().split('T')[0],
+    totalCalls: 0,
+    revenue: 0,
+    payout: 0,
+    rpc: 0,
+    totalCallLengthSeconds: 0,
+    averageCallLengthSeconds: 0,
+    totalCost: 0,
+    noConnections: 0,
+    duplicates: 0,
+    blocked: 0,
+    ivrHandled: 0,
+    profit: 0,
+    margin: 0,
+    conversionRate: 0
+  };
+  
+  // Sum all metrics from individual campaigns
+  for (const summary of allSummaries) {
+    combined.totalCalls += summary.totalCalls || 0;
+    combined.revenue += summary.revenue || 0;
+    combined.payout += summary.payout || 0;
+    combined.totalCallLengthSeconds += summary.totalCallLengthSeconds || 0;
+    // Sum routing costs (total cost from Ringba)
+    combined.totalCost += summary.totalCost || 0;
+    combined.noConnections += summary.noConnections || 0;
+    combined.duplicates += summary.duplicates || 0;
+    combined.blocked += summary.blocked || 0;
+    combined.ivrHandled += summary.ivrHandled || 0;
+  }
+  
+  // Calculate derived metrics
+  combined.rpc = combined.totalCalls > 0 ? combined.revenue / combined.totalCalls : 0;
+  combined.averageCallLengthSeconds = combined.totalCalls > 0 
+    ? combined.totalCallLengthSeconds / combined.totalCalls 
+    : 0;
+  combined.profit = combined.revenue - combined.payout;
+  combined.margin = combined.revenue > 0 ? (combined.profit / combined.revenue) * 100 : 0;
+  
+  // Calculate conversion rate (calls with revenue / total calls)
+  // We need to count calls with revenue from all summaries
+  let callsWithRevenue = 0;
+  for (const summary of allSummaries) {
+    // Estimate: conversion_rate * total_calls / 100
+    const convRate = summary.conversionRate || 0;
+    const totalCalls = summary.totalCalls || 0;
+    callsWithRevenue += Math.round((convRate / 100) * totalCalls);
+  }
+  combined.conversionRate = combined.totalCalls > 0 
+    ? (callsWithRevenue / combined.totalCalls) * 100 
+    : 0;
+  
+  // Round all decimal values
+  combined.revenue = parseFloat(combined.revenue.toFixed(2));
+  combined.payout = parseFloat(combined.payout.toFixed(2));
+  combined.rpc = parseFloat(combined.rpc.toFixed(2));
+  combined.averageCallLengthSeconds = parseFloat(combined.averageCallLengthSeconds.toFixed(2));
+  combined.totalCost = parseFloat(combined.totalCost.toFixed(3)); // Total Cost shows 3 decimals in screenshot
+  combined.profit = parseFloat(combined.profit.toFixed(2));
+  combined.margin = parseFloat(combined.margin.toFixed(2));
+  combined.conversionRate = parseFloat(combined.conversionRate.toFixed(2));
+  
+  return combined;
+};
+
+/**
+ * Fetch and save campaign summary by campaign ID
+ */
+export const syncCampaignSummaryByCampaignId = async (config, campaignId, date = null) => {
+  const accountId = config.ringbaAccountId;
+  const apiToken = config.ringbaApiToken;
+  
+  if (!accountId || !apiToken) {
+    throw new Error('Ringba account ID and API token are required');
+  }
+  
+  if (!campaignId) {
+    throw new Error('Campaign ID is required');
+  }
+  
+  const db = dbOps(config);
+  
+  // Use provided date or default to today
+  const targetDate = date ? new Date(date) : new Date();
+  targetDate.setHours(0, 0, 0, 0);
+  
+  console.log('');
+  console.log('='.repeat(70));
+  console.log('Ringba Campaign Summary Sync (By Campaign ID)');
+  console.log('='.repeat(70));
+  console.log(`Campaign ID: ${campaignId}`);
+  console.log(`Date: ${targetDate.toISOString().split('T')[0]}`);
+  console.log('='.repeat(70));
+  console.log('');
+  
+  try {
+    console.log(`[Campaign ID: ${campaignId}] Processing...`);
+    
+    // Fetch summary from Ringba by campaign ID
+    const summary = await fetchCampaignSummary(
+      accountId,
+      apiToken,
+      campaignId,
+      `Campaign ${campaignId}`,
+      targetDate,
+      true // useCampaignId = true
+    );
+    
+    // Save to database
+    const savedId = await saveCampaignSummary(db, summary);
+    
+    console.log('');
+    console.log('='.repeat(70));
+    console.log('Sync Summary');
+    console.log('='.repeat(70));
+    console.log(`Campaign ID: ${campaignId}`);
+    console.log(`Campaign Name: ${summary.campaignName}`);
+    console.log(`Date: ${targetDate.toISOString().split('T')[0]}`);
+    console.log(`Total Calls: ${summary.totalCalls}`);
+    console.log(`Revenue: $${summary.revenue}`);
+    console.log(`Payout: $${summary.payout}`);
+    console.log(`RPC: $${summary.rpc}`);
+    console.log(`Profit: $${summary.profit}`);
+    console.log(`Margin: ${summary.margin}%`);
+    console.log(`Conversion Rate: ${summary.conversionRate}%`);
+    console.log(`Total Routing Cost: $${summary.totalCost.toFixed(3)}`);
+    console.log('='.repeat(70));
+    console.log('');
+    
+    return {
+      date: targetDate.toISOString().split('T')[0],
+      campaignId: campaignId,
+      summary,
+      savedId,
+      success: true
+    };
+  } catch (error) {
+    console.error(`[Campaign ID: ${campaignId}] ❌ Error:`, error.message);
+    throw error;
+  }
+};
+
+/**
+ * Main function to fetch and save campaign summary for a specific date
+ * Creates both individual campaign summaries and a combined summary
+ */
+export const syncCampaignSummary = async (config, date = null) => {
+  const accountId = config.ringbaAccountId;
+  const apiToken = config.ringbaApiToken;
+  
+  if (!accountId || !apiToken) {
+    throw new Error('Ringba account ID and API token are required');
+  }
+  
+  const db = dbOps(config);
+  
+  // Use provided date or default to today
+  const targetDate = date ? new Date(date) : new Date();
+  targetDate.setHours(0, 0, 0, 0);
+  
+  console.log('');
+  console.log('='.repeat(70));
+  console.log('Ringba Campaign Summary Sync');
+  console.log('='.repeat(70));
+  console.log(`Date: ${targetDate.toISOString().split('T')[0]}`);
+  console.log(`Targets: ${Object.keys(TARGET_IDS).length}`);
+  console.log('='.repeat(70));
+  console.log('');
+  
+  const results = [];
+  const errors = [];
+  const allSummaries = [];
+  
+  // Fetch summary for each target/campaign
+  for (const [targetId, targetName] of Object.entries(TARGET_IDS)) {
+    try {
+      console.log(`\n[${targetName}] Processing...`);
+      
+      // Fetch summary from Ringba
+      const summary = await fetchCampaignSummary(
+        accountId,
+        apiToken,
+        targetId,
+        targetName,
+        targetDate
+      );
+      
+      // Save individual campaign summary to database
+      const savedId = await saveCampaignSummary(db, summary);
+      
+      results.push({
+        targetId,
+        targetName,
+        summary,
+        savedId,
+        success: true
+      });
+      
+      allSummaries.push(summary);
+      
+      console.log(`[${targetName}] ✅ Successfully synced`);
+    } catch (error) {
+      console.error(`[${targetName}] ❌ Error:`, error.message);
+      errors.push({
+        targetId,
+        targetName,
+        error: error.message
+      });
+    }
+  }
+  
+  // Create and save combined summary (matching screenshot format)
+  if (allSummaries.length > 0) {
+    try {
+      console.log(`\n[Combined Summary] Creating aggregated summary...`);
+      const combinedSummary = createCombinedSummary(allSummaries, targetDate);
+      
+      console.log(`[Combined Summary] Calculated combined summary:`);
+      console.log(`  - Campaign: ${combinedSummary.campaignName}`);
+      console.log(`  - Total Calls: ${combinedSummary.totalCalls}`);
+      console.log(`  - Revenue: $${combinedSummary.revenue}`);
+      console.log(`  - Payout: $${combinedSummary.payout}`);
+      console.log(`  - RPC: $${combinedSummary.rpc}`);
+      console.log(`  - Profit: $${combinedSummary.profit}`);
+      console.log(`  - Margin: ${combinedSummary.margin}%`);
+      console.log(`  - Conversion Rate: ${combinedSummary.conversionRate}%`);
+      console.log(`  - No Connections: ${combinedSummary.noConnections}`);
+      console.log(`  - Duplicates: ${combinedSummary.duplicates}`);
+      console.log(`  - Blocked: ${combinedSummary.blocked}`);
+      console.log(`  - IVR Handled: ${combinedSummary.ivrHandled}`);
+      console.log(`  - Total Cost: $${combinedSummary.totalCost}`);
+      
+      // Save combined summary to database
+      const combinedId = await saveCampaignSummary(db, combinedSummary);
+      console.log(`[Combined Summary] ✅ Saved combined summary (ID: ${combinedId})`);
+      
+      results.push({
+        targetId: 'COMBINED',
+        targetName: 'Combined Summary',
+        summary: combinedSummary,
+        savedId: combinedId,
+        success: true
+      });
+    } catch (error) {
+      console.error(`[Combined Summary] ❌ Error:`, error.message);
+      errors.push({
+        targetId: 'COMBINED',
+        targetName: 'Combined Summary',
+        error: error.message
+      });
+    }
+  }
+  
+  console.log('');
+  console.log('='.repeat(70));
+  console.log('Sync Summary');
+  console.log('='.repeat(70));
+  console.log(`Date: ${targetDate.toISOString().split('T')[0]}`);
+  console.log(`Successful: ${results.length}`);
+  console.log(`Failed: ${errors.length}`);
+  console.log('='.repeat(70));
+  
+  if (results.length > 0) {
+    console.log('\nSuccessful syncs:');
+    results.forEach(r => {
+      if (r.targetId === 'COMBINED') {
+        console.log(`  - ${r.targetName}: ${r.summary.totalCalls} calls, RPC: $${r.summary.rpc}, Revenue: $${r.summary.revenue}`);
+      } else {
+        console.log(`  - ${r.targetName}: ${r.summary.totalCalls} calls, RPC: $${r.summary.rpc}`);
+      }
+    });
+  }
+  
+  if (errors.length > 0) {
+    console.log('\nErrors:');
+    errors.forEach(e => {
+      console.log(`  - ${e.targetName}: ${e.error}`);
+    });
+  }
+  
+  console.log('');
+  
+  return {
+    date: targetDate.toISOString().split('T')[0],
+    successful: results.length,
+    failed: errors.length,
+    results,
+    errors
+  };
+};
+

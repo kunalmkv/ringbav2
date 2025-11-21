@@ -1,10 +1,11 @@
 // Service to sync cost changes from eLocal to Ringba dashboard
 // Detects changes in elocal_call_data compared to ringba_calls
-// Matches by caller ID, time duration, and payout
+// Matches by: 1) Category (from target ID), 2) caller ID (E.164), 3) time duration (±120 minutes), 4) payout (within tolerance)
 // Updates Ringba payout and revenue in bulk
 
 import { dbOps } from '../database/postgres-operations.js';
 import { updateCallPayment } from '../http/ringba-client.js';
+import { getCategoryFromTargetId } from '../http/ringba-target-calls.js';
 import * as TE from 'fp-ts/lib/TaskEither.js';
 import * as T from 'fp-ts/lib/Task.js';
 
@@ -115,8 +116,17 @@ const timeDiffMinutes = (date1, date2) => {
 };
 
 // Match eLocal call with Ringba call
-// Uses: caller ID (E.164), time range (±120 minutes), and payout (within tolerance)
+// Uses: 1) Category (from target ID), 2) caller ID (E.164), 3) time range (±120 minutes), 4) payout (within tolerance)
 const matchCall = (elocalCall, ringbaCall, windowMinutes = 120, payoutTolerance = 0.01) => {
+  // 0. Match category first (from Ringba target ID)
+  const ringbaCategory = getCategoryFromTargetId(ringbaCall.target_id);
+  const elocalCategory = elocalCall.category || 'STATIC';
+  
+  // Categories must match
+  if (ringbaCategory !== elocalCategory) {
+    return null;
+  }
+  
   // 1. Match caller ID (convert both to E.164)
   const elocalCallerE164 = toE164(elocalCall.caller_id);
   const ringbaCallerE164 = ringbaCall.caller_id_e164 || toE164(ringbaCall.caller_id);
@@ -270,7 +280,7 @@ const getRingbaCallsForMatching = async (db, startDate, endDate) => {
     const query = `
       SELECT 
         id, inbound_call_id, call_date_time, caller_id, caller_id_e164,
-        payout_amount, revenue_amount
+        payout_amount, revenue_amount, target_id
       FROM ringba_calls
       WHERE SUBSTRING(call_date_time, 1, 10) = ANY(ARRAY[${placeholders}])
       ORDER BY caller_id_e164, call_date_time
@@ -291,16 +301,29 @@ const detectChanges = (elocalCalls, ringbaCalls) => {
   const updates = [];
   const unmatched = [];
   
-  // Group Ringba calls by normalized caller ID for faster lookup
-  const ringbaCallsByCaller = new Map();
+  // Group Ringba calls by category first, then by normalized caller ID for faster lookup
+  // Structure: Map<category, Map<callerE164, Array<ringbaCall>>>
+  const ringbaCallsByCategoryAndCaller = new Map();
   for (const ringbaCall of ringbaCalls) {
-    const callerE164 = ringbaCall.caller_id_e164 || toE164(ringbaCall.caller_id);
-    if (callerE164) {
-      if (!ringbaCallsByCaller.has(callerE164)) {
-        ringbaCallsByCaller.set(callerE164, []);
-      }
-      ringbaCallsByCaller.get(callerE164).push(ringbaCall);
+    const category = getCategoryFromTargetId(ringbaCall.target_id);
+    if (!category) {
+      continue; // Skip calls with invalid target ID
     }
+    
+    const callerE164 = ringbaCall.caller_id_e164 || toE164(ringbaCall.caller_id);
+    if (!callerE164) {
+      continue; // Skip calls without valid caller ID
+    }
+    
+    if (!ringbaCallsByCategoryAndCaller.has(category)) {
+      ringbaCallsByCategoryAndCaller.set(category, new Map());
+    }
+    
+    const callsByCaller = ringbaCallsByCategoryAndCaller.get(category);
+    if (!callsByCaller.has(callerE164)) {
+      callsByCaller.set(callerE164, []);
+    }
+    callsByCaller.get(callerE164).push(ringbaCall);
   }
   
   // Track which Ringba calls have been matched
@@ -308,16 +331,25 @@ const detectChanges = (elocalCalls, ringbaCalls) => {
   
   // Match each eLocal call
   for (const elocalCall of elocalCalls) {
+    const elocalCategory = elocalCall.category || 'STATIC';
     const callerE164 = toE164(elocalCall.caller_id);
+    
     if (!callerE164) {
       unmatched.push({ elocalCall, reason: 'Invalid caller ID' });
       continue;
     }
     
-    const candidateRingbaCalls = ringbaCallsByCaller.get(callerE164) || [];
+    // Get Ringba calls for this category and caller ID
+    const categoryCalls = ringbaCallsByCategoryAndCaller.get(elocalCategory);
+    if (!categoryCalls) {
+      unmatched.push({ elocalCall, reason: `No Ringba calls found for category: ${elocalCategory}` });
+      continue;
+    }
+    
+    const candidateRingbaCalls = categoryCalls.get(callerE164) || [];
     
     if (candidateRingbaCalls.length === 0) {
-      unmatched.push({ elocalCall, reason: 'No matching Ringba call found' });
+      unmatched.push({ elocalCall, reason: `No matching Ringba call found for category ${elocalCategory} and caller ${callerE164}` });
       continue;
     }
     
@@ -366,6 +398,7 @@ const detectChanges = (elocalCalls, ringbaCalls) => {
       updates.push({
         elocalCallId: elocalCall.id,
         ringbaInboundCallId: bestMatch.ringbaCall.inbound_call_id,
+        targetId: bestMatch.ringbaCall.target_id || null, // Include target ID for API call
         currentPayout: ringbaPayout,
         currentRevenue: ringbaRevenue,
         newPayout: newPayout,
@@ -389,7 +422,8 @@ const updateRingbaCall = async (accountId, apiToken, update) => {
     const payload = {
       newConversionAmount: Number(update.newRevenue),
       newPayoutAmount: Number(update.newPayout),
-      reason: 'Call payments synced from eLocal database.'
+      reason: 'Call payments synced from eLocal database.',
+      targetId: update.targetId || null // Include target ID if available
     };
     
     const updateEither = await updateCallPayment(accountId, apiToken)(update.ringbaInboundCallId, payload)();
@@ -597,6 +631,7 @@ export const syncCostToRingba = async (config, dateRange, category = null) => {
     
     console.log(`[Step 4] [${i + 1}/${updates.length}] Updating call ${update.ringbaInboundCallId}...`);
     console.log(`         - Call ID: ${update.ringbaInboundCallId}`);
+    console.log(`         - Target ID: ${update.targetId || 'N/A'}`);
     console.log(`         - eLocal Call ID: ${update.elocalCallId}`);
     console.log(`         - Start Time: ${startTime}`);
     console.log(`         - Current: payout=$${update.currentPayout.toFixed(2)}, revenue=$${update.currentRevenue.toFixed(2)}`);

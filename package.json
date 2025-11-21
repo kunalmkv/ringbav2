@@ -13,6 +13,7 @@
     "test:current-api": "node test-service.js current-api",
     "scrape": "node run-scraper.js",
     "sync:cost": "node run-ringba-cost-sync.js",
+    "sync:campaign-summary": "node run-ringba-campaign-summary.js",
     "scheduler": "node src/services/scheduler.js",
     "scheduler:historical": "node start-historical-scheduler.js",
     "scheduler:current": "node start-current-scheduler.js",

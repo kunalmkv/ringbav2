@@ -109,38 +109,42 @@ app.get('/api/payout-comparison', async (req, res) => {
       }
       
       // Add data based on category
+      // STATIC: Use original_payout (currently correct, so keep it)
+      // API: Use original_revenue for Ringba revenue (as per user requirement - API was showing incorrect value)
+      // eLocal values come from payout column for both categories
       if (category === 'STATIC') {
         dataByDate[date].ringba_static = parseFloat(row.ringba_payout) || 0;
         dataByDate[date].elocal_static = parseFloat(row.elocal_payout) || 0;
       } else if (category === 'API') {
-        dataByDate[date].ringba_api = parseFloat(row.ringba_payout) || 0;
+        // Use original_revenue for API category Ringba revenue (fixes incorrect API values)
+        dataByDate[date].ringba_api = parseFloat(row.ringba_revenue) || 0;
         dataByDate[date].elocal_api = parseFloat(row.elocal_payout) || 0;
       }
     }
     
     // Calculate totals and adjustments
+    // Formula: adjustments = ringba_total - elocal_total
+    // Formula: adjustment_static = (ringba_static - elocal_static) / 100
+    // Formula: adjustment_api = (ringba_api - elocal_api) / 100
+    // Formula: adjustment_pct = adjustments / ringba_total
     const processedData = Object.values(dataByDate).map(item => {
       item.ringba_total = item.ringba_static + item.ringba_api;
       item.elocal_total = item.elocal_static + item.elocal_api;
-      item.adjustments = item.elocal_total - item.ringba_total;
       
-      // Calculate adjustment percentages
-      if (item.ringba_static > 0) {
-        item.adjustment_static_pct = ((item.elocal_static - item.ringba_static) / item.ringba_static) * 100;
-      } else {
-        item.adjustment_static_pct = item.elocal_static > 0 ? 100 : 0;
-      }
+      // Adjustments: ringba_total - elocal_total
+      item.adjustments = item.ringba_total - item.elocal_total;
       
-      if (item.ringba_api > 0) {
-        item.adjustment_api_pct = ((item.elocal_api - item.ringba_api) / item.ringba_api) * 100;
-      } else {
-        item.adjustment_api_pct = item.elocal_api > 0 ? 100 : 0;
-      }
+      // Adjustment Static: (ringba_static - elocal_static) / 100
+      item.adjustment_static_pct = (item.ringba_static - item.elocal_static) / 100;
       
+      // Adjustment API: (ringba_api - elocal_api) / 100
+      item.adjustment_api_pct = (item.ringba_api - item.elocal_api) / 100;
+      
+      // Adjustment %: (adjustments / ringba_total) * 100 (multiply by 100 for percentage display)
       if (item.ringba_total > 0) {
         item.adjustment_pct = (item.adjustments / item.ringba_total) * 100;
       } else {
-        item.adjustment_pct = item.elocal_total > 0 ? 100 : 0;
+        item.adjustment_pct = 0;
       }
       
       return item;

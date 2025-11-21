@@ -91,3 +91,36 @@ CREATE INDEX IF NOT EXISTS idx_ringba_calls_caller_id_e164 ON ringba_calls(calle
 CREATE INDEX IF NOT EXISTS idx_ringba_calls_call_date_time ON ringba_calls(call_date_time);
 CREATE INDEX IF NOT EXISTS idx_ringba_calls_target_id ON ringba_calls(target_id);
 
+-- Table to store Ringba campaign summary data (daily tracking)
+CREATE TABLE IF NOT EXISTS ringba_campaign_summary (
+    id SERIAL PRIMARY KEY,
+    campaign_name VARCHAR(255) NOT NULL,
+    campaign_id VARCHAR(255),
+    target_id VARCHAR(255),
+    target_name VARCHAR(255),
+    summary_date DATE NOT NULL,
+    total_calls INTEGER DEFAULT 0,
+    revenue DECIMAL(10, 2) DEFAULT 0,
+    payout DECIMAL(10, 2) DEFAULT 0,
+    rpc DECIMAL(10, 2) DEFAULT 0, -- Revenue Per Call
+    total_call_length_seconds INTEGER DEFAULT 0, -- TCL in seconds
+    average_call_length_seconds DECIMAL(10, 2) DEFAULT 0, -- ACL in seconds
+    total_cost DECIMAL(10, 2) DEFAULT 0,
+    no_connections INTEGER DEFAULT 0,
+    duplicates INTEGER DEFAULT 0,
+    blocked INTEGER DEFAULT 0,
+    ivr_handled INTEGER DEFAULT 0,
+    profit DECIMAL(10, 2) DEFAULT 0,
+    margin DECIMAL(10, 2) DEFAULT 0, -- Margin percentage
+    conversion_rate DECIMAL(10, 2) DEFAULT 0, -- Conversion rate percentage
+    created_at TIMESTAMP DEFAULT CURRENT_TIMESTAMP,
+    updated_at TIMESTAMP DEFAULT CURRENT_TIMESTAMP,
+    UNIQUE(campaign_name, summary_date)
+);
+
+-- Create indexes for campaign summary table
+CREATE INDEX IF NOT EXISTS idx_ringba_campaign_summary_campaign_name ON ringba_campaign_summary(campaign_name);
+CREATE INDEX IF NOT EXISTS idx_ringba_campaign_summary_date ON ringba_campaign_summary(summary_date);
+CREATE INDEX IF NOT EXISTS idx_ringba_campaign_summary_campaign_id ON ringba_campaign_summary(campaign_id);
+CREATE INDEX IF NOT EXISTS idx_ringba_campaign_summary_target_id ON ringba_campaign_summary(target_id);
+

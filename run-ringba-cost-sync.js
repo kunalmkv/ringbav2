@@ -108,12 +108,18 @@ const createDateRange = (startDate, endDate) => {
   start.setHours(0, 0, 0, 0);
   end.setHours(23, 59, 59, 999);
   
+  // Create temporary dateRange object for description
+  const tempDateRange = {
+    startDate: start,
+    endDate: end
+  };
+  
   return {
     startDate: start.toISOString(),
     endDate: end.toISOString(),
     startDateFormatted: formatDateForElocal(start),
     endDateFormatted: formatDateForElocal(end),
-    description: getDateRangeDescription(start, end)
+    description: getDateRangeDescription(tempDateRange)
   };
 };
 

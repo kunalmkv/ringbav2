@@ -542,9 +542,9 @@ const toAmountString = (value) => {
 };
 
 // Update call payment/revenue using Ringba Payments API (absolute override)
-// Accepts an object with optional fields: newConversionAmount, newPayoutAmount, reason
+// Accepts an object with optional fields: newConversionAmount, newPayoutAmount, reason, targetId
 // For non-connected calls, omit newConversionAmount (only send newPayoutAmount)
-export const updateCallPayment = (accountId, apiToken) => (inboundCallId, { newConversionAmount, newPayoutAmount, reason }) =>
+export const updateCallPayment = (accountId, apiToken) => (inboundCallId, { newConversionAmount, newPayoutAmount, reason, targetId }) =>
   TE.tryCatch(
     async () => {
       if (!inboundCallId) {
@@ -566,6 +566,12 @@ export const updateCallPayment = (accountId, apiToken) => (inboundCallId, { newC
         inboundCallId,
         reason: reason || 'Call payments adjusted by eLocal sync service.'
       };
+
+      // Include targetId if provided (required by Ringba API for some accounts)
+      if (targetId) {
+        console.log(targetId, "target id")
+        body.targetId = targetId;
+      }
 
       // Set adjustConversion and adjustPayout flags based on what we're updating
       if (newConversionAmount !== undefined) {

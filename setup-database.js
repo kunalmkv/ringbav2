@@ -87,6 +87,7 @@ async function setupDatabase() {
     console.log('  - elocal_call_data');
     console.log('  - adjustment_details');
     console.log('  - ringba_calls');
+    console.log('  - ringba_campaign_summary');
     
   } catch (error) {
     await client.query('ROLLBACK');
