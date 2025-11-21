@@ -72,8 +72,13 @@ const sendError = (res, message, statusCode = 500) => {
 
 // Simple function to fetch payout comparison data directly from database
 const fetchPayoutComparisonData = async (startDate = null, endDate = null) => {
+  let client = null;
   try {
     console.log('[DB Query] Fetching payout comparison data...', { startDate, endDate });
+    
+    // Get a client from the pool
+    client = await pool.connect();
+    console.log('[DB Query] Database client acquired');
     
     // Build date filter
     let dateFilter = '';
@@ -108,22 +113,26 @@ const fetchPayoutComparisonData = async (startDate = null, endDate = null) => {
     console.log('[DB Query] Executing query:', query);
     console.log('[DB Query] With params:', params);
     
-    const result = await pool.query(query, params);
+    const result = await client.query(query, params);
     console.log(`[DB Query] Query returned ${result.rows.length} rows`);
     
     // Get RPC data from ringba_campaign_summary
     let rpcQuery = `SELECT summary_date::text as date, rpc, campaign_name FROM ringba_campaign_summary`;
     const rpcParams = [];
+    let rpcParamIndex = 1;
     
     if (startDate && endDate) {
-      rpcQuery += ` WHERE summary_date >= $1 AND summary_date <= $2`;
+      rpcQuery += ` WHERE summary_date >= $${rpcParamIndex} AND summary_date <= $${rpcParamIndex + 1}`;
       rpcParams.push(startDate, endDate);
+      rpcParamIndex += 2;
     } else if (startDate) {
-      rpcQuery += ` WHERE summary_date >= $1`;
+      rpcQuery += ` WHERE summary_date >= $${rpcParamIndex}`;
       rpcParams.push(startDate);
+      rpcParamIndex += 1;
     } else if (endDate) {
-      rpcQuery += ` WHERE summary_date <= $1`;
+      rpcQuery += ` WHERE summary_date <= $${rpcParamIndex}`;
       rpcParams.push(endDate);
+      rpcParamIndex += 1;
     }
     
     rpcQuery += ` ORDER BY summary_date DESC, 
@@ -134,7 +143,7 @@ const fetchPayoutComparisonData = async (startDate = null, endDate = null) => {
       END ASC`;
     
     console.log('[DB Query] Executing RPC query:', rpcQuery);
-    const rpcResult = await pool.query(rpcQuery, rpcParams);
+    const rpcResult = await client.query(rpcQuery, rpcParams);
     console.log(`[DB Query] RPC query returned ${rpcResult.rows.length} rows`);
     
     // Build RPC map by date
@@ -216,7 +225,14 @@ const fetchPayoutComparisonData = async (startDate = null, endDate = null) => {
     return processedData;
   } catch (error) {
     console.error('[DB Query Error]:', error);
+    console.error('[DB Query Error] Stack:', error.stack);
     throw error;
+  } finally {
+    // Always release the client back to the pool
+    if (client) {
+      client.release();
+      console.log('[DB Query] Database client released');
+    }
   }
 };
 
@@ -249,15 +265,40 @@ app.get('/api/payout-comparison', async (req, res) => {
 
 // Health check endpoint
 app.get('/api/health', async (req, res) => {
+  let client = null;
   try {
-    const result = await pool.query('SELECT NOW() as now');
+    client = await pool.connect();
+    const result = await client.query('SELECT NOW() as now, current_database() as db_name');
     sendJSON(res, {
       status: 'healthy',
       database: 'connected',
+      db_name: result.rows[0].db_name,
       timestamp: result.rows[0].now
     });
   } catch (error) {
     sendError(res, `Database connection failed: ${error.message}`, 503);
+  } finally {
+    if (client) client.release();
+  }
+});
+
+// Test endpoint to verify data exists
+app.get('/api/test-data', async (req, res) => {
+  let client = null;
+  try {
+    client = await pool.connect();
+    const countResult = await client.query('SELECT COUNT(*) as count FROM elocal_call_data');
+    const sampleResult = await client.query('SELECT * FROM elocal_call_data LIMIT 1');
+    
+    sendJSON(res, {
+      total_records: parseInt(countResult.rows[0].count),
+      sample_record: sampleResult.rows[0] || null,
+      tables_exist: true
+    });
+  } catch (error) {
+    sendError(res, `Test failed: ${error.message}`, 500);
+  } finally {
+    if (client) client.release();
   }
 });
 

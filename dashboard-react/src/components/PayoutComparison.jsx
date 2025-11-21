@@ -31,35 +31,48 @@ const PayoutComparison = () => {
     return `${num.toFixed(2)}%`;
   };
 
-  // Fetch data - Simplified
+  // Fetch data - Simplified with better error handling
   const fetchData = async () => {
     setLoading(true);
     setError(null);
     try {
-      console.log('[PayoutComparison] Fetching data...', { startDate, endDate });
+      console.log('[PayoutComparison] ===== FETCHING DATA =====');
+      console.log('[PayoutComparison] Start Date:', startDate || 'null');
+      console.log('[PayoutComparison] End Date:', endDate || 'null');
+      
       const result = await api.payoutComparison(startDate || null, endDate || null);
-      console.log('[PayoutComparison] Full API Response:', result);
+      console.log('[PayoutComparison] ===== API RESPONSE RECEIVED =====');
+      console.log('[PayoutComparison] Full Response Object:', result);
+      console.log('[PayoutComparison] Response Type:', typeof result);
+      console.log('[PayoutComparison] Has data property:', 'data' in result);
       
       // Direct access to data array
       const dataArray = result?.data || [];
-      console.log('[PayoutComparison] Data array length:', dataArray.length);
+      console.log('[PayoutComparison] Data Array:', dataArray);
+      console.log('[PayoutComparison] Data Array Type:', Array.isArray(dataArray));
+      console.log('[PayoutComparison] Data Array Length:', dataArray.length);
       
       if (dataArray.length > 0) {
-        console.log('[PayoutComparison] First record:', dataArray[0]);
+        console.log('[PayoutComparison] First Record:', JSON.stringify(dataArray[0], null, 2));
+        console.log('[PayoutComparison] Setting data state with', dataArray.length, 'records');
+        setData(dataArray);
+      } else {
+        console.warn('[PayoutComparison] ⚠️ No data in array!');
+        console.warn('[PayoutComparison] Result object:', JSON.stringify(result, null, 2));
+        setData([]);
       }
       
-      if (dataArray.length === 0) {
-        console.warn('[PayoutComparison] No data returned from API');
-        setData([]);
-      } else {
-        setData(dataArray);
-      }
+      console.log('[PayoutComparison] ===== FETCH COMPLETE =====');
     } catch (err) {
-      console.error('[PayoutComparison] Error:', err);
+      console.error('[PayoutComparison] ===== ERROR OCCURRED =====');
+      console.error('[PayoutComparison] Error Type:', err.constructor.name);
+      console.error('[PayoutComparison] Error Message:', err.message);
+      console.error('[PayoutComparison] Error Stack:', err.stack);
       setError(err.message || 'Failed to fetch data');
       setData([]);
     } finally {
       setLoading(false);
+      console.log('[PayoutComparison] Loading set to false');
     }
   };
 
@@ -154,32 +167,45 @@ const PayoutComparison = () => {
             </tr>
           </thead>
           <tbody>
-            {data.length === 0 ? (
+            {loading ? (
+              <tr>
+                <td colSpan="13" className="no-data">Loading data...</td>
+              </tr>
+            ) : error ? (
+              <tr>
+                <td colSpan="13" className="no-data" style={{color: 'red'}}>
+                  Error: {error}
+                </td>
+              </tr>
+            ) : data.length === 0 ? (
               <tr>
                 <td colSpan="13" className="no-data">No data available</td>
               </tr>
             ) : (
-              data.map((row, index) => (
-                <tr key={row.date} className={getRowClass(row.adjustments)}>
-                  <td className="col-date">{formatDate(row.date)}</td>
-                  <td className="col-amount">{formatCurrency(row.ringba_static)}</td>
-                  <td className="col-amount">{formatCurrency(row.ringba_api)}</td>
-                  <td className="col-amount">{formatCurrency(row.elocal_static)}</td>
-                  <td className="col-amount">{formatCurrency(row.elocal_api)}</td>
-                  <td className="col-amount">{formatCurrency(row.ringba_total)}</td>
-                  <td className="col-amount">{formatCurrency(row.elocal_total)}</td>
-                  <td className="col-amount">{row.total_calls || 0}</td>
-                  <td className="col-amount">{formatCurrency(row.rpc)}</td>
-                  <td className={`col-amount ${row.adjustments < 0 ? 'negative' : row.adjustments > 0 ? 'positive' : ''}`}>
-                    {formatCurrency(row.adjustments)}
-                  </td>
-                  <td className="col-percentage">{formatPercentage(row.adjustment_static_pct)}</td>
-                  <td className="col-percentage">{formatPercentage(row.adjustment_api_pct)}</td>
-                  <td className={`col-percentage ${row.adjustment_pct < 0 ? 'negative' : row.adjustment_pct > 0 ? 'positive' : ''}`}>
-                    {formatPercentage(row.adjustment_pct)}
-                  </td>
-                </tr>
-              ))
+              data.map((row, index) => {
+                console.log(`[PayoutComparison] Rendering row ${index}:`, row.date);
+                return (
+                  <tr key={`${row.date}-${index}`} className={getRowClass(row.adjustments)}>
+                    <td className="col-date">{formatDate(row.date)}</td>
+                    <td className="col-amount">{formatCurrency(row.ringba_static)}</td>
+                    <td className="col-amount">{formatCurrency(row.ringba_api)}</td>
+                    <td className="col-amount">{formatCurrency(row.elocal_static)}</td>
+                    <td className="col-amount">{formatCurrency(row.elocal_api)}</td>
+                    <td className="col-amount">{formatCurrency(row.ringba_total)}</td>
+                    <td className="col-amount">{formatCurrency(row.elocal_total)}</td>
+                    <td className="col-amount">{row.total_calls || 0}</td>
+                    <td className="col-amount">{formatCurrency(row.rpc)}</td>
+                    <td className={`col-amount ${row.adjustments < 0 ? 'negative' : row.adjustments > 0 ? 'positive' : ''}`}>
+                      {formatCurrency(row.adjustments)}
+                    </td>
+                    <td className="col-percentage">{formatPercentage(row.adjustment_static_pct)}</td>
+                    <td className="col-percentage">{formatPercentage(row.adjustment_api_pct)}</td>
+                    <td className={`col-percentage ${row.adjustment_pct < 0 ? 'negative' : row.adjustment_pct > 0 ? 'positive' : ''}`}>
+                      {formatPercentage(row.adjustment_pct)}
+                    </td>
+                  </tr>
+                );
+              })
             )}
           </tbody>
         </table>
