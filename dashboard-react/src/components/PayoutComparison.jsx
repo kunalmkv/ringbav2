@@ -44,18 +44,31 @@ const PayoutComparison = () => {
       console.log('[PayoutComparison] ===== API RESPONSE RECEIVED =====');
       console.log('[PayoutComparison] Full Response Object:', result);
       console.log('[PayoutComparison] Response Type:', typeof result);
+      console.log('[PayoutComparison] Is result null?', result === null);
+      console.log('[PayoutComparison] Is result undefined?', result === undefined);
+      
+      if (!result) {
+        console.error('[PayoutComparison] ❌ Result is null or undefined!');
+        setError('No data returned from API');
+        setData([]);
+        return;
+      }
+      
       console.log('[PayoutComparison] Has data property:', 'data' in result);
+      console.log('[PayoutComparison] Result keys:', Object.keys(result));
       
       // Direct access to data array
       const dataArray = result?.data || [];
       console.log('[PayoutComparison] Data Array:', dataArray);
       console.log('[PayoutComparison] Data Array Type:', Array.isArray(dataArray));
       console.log('[PayoutComparison] Data Array Length:', dataArray.length);
+      console.log('[PayoutComparison] Data Array is empty?', dataArray.length === 0);
       
       if (dataArray.length > 0) {
-        console.log('[PayoutComparison] First Record:', JSON.stringify(dataArray[0], null, 2));
-        console.log('[PayoutComparison] Setting data state with', dataArray.length, 'records');
+        console.log('[PayoutComparison] ✓ First Record:', JSON.stringify(dataArray[0], null, 2));
+        console.log('[PayoutComparison] ✓ Setting data state with', dataArray.length, 'records');
         setData(dataArray);
+        console.log('[PayoutComparison] ✓ Data state updated');
       } else {
         console.warn('[PayoutComparison] ⚠️ No data in array!');
         console.warn('[PayoutComparison] Result object:', JSON.stringify(result, null, 2));
@@ -115,6 +128,14 @@ const PayoutComparison = () => {
     );
   }
 
+  // Debug: Log current state
+  console.log('[PayoutComparison] Render - Current state:', {
+    loading,
+    error,
+    dataLength: data.length,
+    hasData: data.length > 0
+  });
+
   return (
     <section className="section payout-comparison-section">
       <div className="section-header">
@@ -141,6 +162,15 @@ const PayoutComparison = () => {
           </div>
         </div>
       </div>
+
+      {/* Debug info */}
+      {process.env.NODE_ENV === 'development' && (
+        <div style={{padding: '10px', background: '#f0f0f0', margin: '10px 0', fontSize: '12px'}}>
+          <strong>Debug:</strong> Loading: {loading ? 'Yes' : 'No'}, 
+          Error: {error || 'None'}, 
+          Data: {data.length} records
+        </div>
+      )}
 
       <div className="table-container">
         <table className="payout-comparison-table">
