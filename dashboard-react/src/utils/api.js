@@ -6,12 +6,12 @@ const getBasePath = () => {
 
 // Get API base URL
 // Priority:
-// 1. window.API_BASE_URL (set in index.html before app loads)
+// 1. window.API_BASE_URL (set in config.js or index.html before app loads)
 // 2. VITE_API_URL environment variable (set during build)
-// 3. Auto-detect: if not localhost, use same hostname with port 3000
+// 3. Auto-detect: use same origin with path prefix if available
 // 4. Default: use current origin (for development)
 const getApiBaseUrl = () => {
-  // Check for window.API_BASE_URL (can be set in index.html via script tag)
+  // Check for window.API_BASE_URL (set by config.js or index.html)
   if (typeof window !== 'undefined' && window.API_BASE_URL) {
     console.log('[Dashboard] Using window.API_BASE_URL:', window.API_BASE_URL);
     return window.API_BASE_URL;
@@ -23,21 +23,31 @@ const getApiBaseUrl = () => {
     return import.meta.env.VITE_API_URL;
   }
   
-  // Auto-detect: if served from a server (not localhost), assume backend is on port 3000
-  const hostname = window.location.hostname;
-  const isLocalhost = hostname === 'localhost' || hostname === '127.0.0.1' || hostname === '';
+  // Auto-detect: Check if we're in a subdirectory and use that path
+  const origin = window.location.origin;
+  const pathname = window.location.pathname;
   
-  if (!isLocalhost) {
-    // Production: assume backend is on same host, port 3000
-    const apiUrl = `${window.location.protocol}//${hostname}:3000`;
-    console.log('[Dashboard] Auto-detected API URL (production):', apiUrl);
+  // Check if pathname contains a known prefix (e.g., /ringba-sync-dashboard)
+  if (pathname.includes('/ringba-sync-dashboard')) {
+    const basePath = pathname.substring(0, pathname.lastIndexOf('/ringba-sync-dashboard') + '/ringba-sync-dashboard'.length);
+    const apiUrl = origin + basePath;
+    console.log('[Dashboard] Auto-detected API URL (with path prefix):', apiUrl);
     return apiUrl;
   }
   
-  // Development: use current origin
-  const devUrl = window.location.origin + getBasePath();
-  console.log('[Dashboard] Using current origin (development):', devUrl);
-  return devUrl;
+  // Development/localhost: use current origin
+  const hostname = window.location.hostname;
+  const isLocalhost = hostname === 'localhost' || hostname === '127.0.0.1' || hostname === '';
+  
+  if (isLocalhost) {
+    const devUrl = origin + getBasePath();
+    console.log('[Dashboard] Using current origin (development):', devUrl);
+    return devUrl;
+  }
+  
+  // Production fallback: use same origin
+  console.log('[Dashboard] Using current origin (production fallback):', origin);
+  return origin;
 };
 
 export const BASE_PATH = getBasePath();
