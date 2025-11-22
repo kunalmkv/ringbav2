@@ -4,9 +4,55 @@
     <meta charset="UTF-8">
     <meta name="viewport" content="width=device-width, initial-scale=1.0">
     <title>eLocal Scraper Dashboard</title>
-    <!-- Load API configuration (can be edited on server) -->
-    <script src="/config.js"></script>
-  <script type="module" crossorigin src="/assets/index-BY2KK2Nw.js"></script>
+    <!-- API Configuration - Embedded directly to ensure it loads before React -->
+    <script>
+      (function() {
+        'use strict';
+        // Set API base URL based on current location
+        // This runs IMMEDIATELY when the page loads, before React
+        const origin = window.location.origin;
+        const pathname = window.location.pathname;
+        
+        console.log('[Config] ===== INITIALIZING (Embedded) =====');
+        console.log('[Config] Origin:', origin);
+        console.log('[Config] Pathname:', pathname);
+        
+        // Only set if not already set (allows manual override via external config.js)
+        if (!window.API_BASE_URL) {
+          // Check if we're in /ringba-sync-dashboard path
+          if (pathname.indexOf('/ringba-sync-dashboard') !== -1) {
+            window.API_BASE_URL = origin + '/ringba-sync-dashboard';
+            console.log('[Config] ✓ Detected /ringba-sync-dashboard path');
+          } else {
+            // Localhost or root path - use same origin
+            window.API_BASE_URL = origin;
+            console.log('[Config] ✓ Using same origin (localhost/root)');
+          }
+        }
+        
+        console.log('[Config] Final API_BASE_URL:', window.API_BASE_URL);
+        console.log('[Config] Test API URL:', window.API_BASE_URL + '/api/payout-comparison');
+        console.log('[Config] ===== CONFIG COMPLETE =====');
+        
+        // Try to load external config.js for manual overrides (non-blocking)
+        const pathname2 = window.location.pathname;
+        let configPath = '/config.js';
+        if (pathname2.indexOf('/ringba-sync-dashboard') !== -1) {
+          configPath = '/ringba-sync-dashboard/config.js';
+        }
+        const script = document.createElement('script');
+        script.src = configPath;
+        script.async = true; // Non-blocking, just for overrides
+        script.onload = function() {
+          console.log('[Config] External config.js loaded (may override):', window.API_BASE_URL);
+        };
+        script.onerror = function() {
+          console.log('[Config] External config.js not found, using embedded config');
+        };
+        document.head.appendChild(script);
+      })();
+    </script>
+  <script type="module" crossorigin src="/assets/index-CzQ4aTIV.js"></script>
   <link rel="stylesheet" crossorigin href="/assets/index-Cz6NS20i.css">
 </head>
 <body>

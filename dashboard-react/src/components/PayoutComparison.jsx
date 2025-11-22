@@ -90,7 +90,13 @@ const PayoutComparison = () => {
   };
 
   useEffect(() => {
-    fetchData();
+    // Add a small delay to ensure config.js has loaded
+    const timer = setTimeout(() => {
+      console.log('[PayoutComparison] useEffect triggered, fetching data...');
+      fetchData();
+    }, 100);
+    
+    return () => clearTimeout(timer);
   }, []);
 
   const handleRefresh = () => {
