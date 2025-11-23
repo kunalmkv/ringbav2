@@ -1,60 +1,22 @@
 // API utility functions
+// Simplified approach matching elocal project (which works perfectly on server)
+
 const getBasePath = () => {
-  // No base path needed - serving from root
+  const pathname = window.location.pathname;
+  // If pathname includes /ringba-sync-dashboard, use it as base path
+  if (pathname.includes('/ringba-sync-dashboard')) {
+    return '/ringba-sync-dashboard';
+  }
   return '';
 };
 
-// Get API base URL
-// Priority:
-// 1. window.API_BASE_URL (set in config.js or index.html before app loads)
-// 2. VITE_API_URL environment variable (set during build)
-// 3. Auto-detect: use same origin with path prefix if available
-// 4. Default: use current origin (for development)
-const getApiBaseUrl = () => {
-  // Check for window.API_BASE_URL (set by config.js or index.html)
-  if (typeof window !== 'undefined' && window.API_BASE_URL) {
-    console.log('[Dashboard] Using window.API_BASE_URL:', window.API_BASE_URL);
-    return window.API_BASE_URL;
-  }
-  
-  // Check for environment variable (set during build)
-  if (import.meta.env.VITE_API_URL) {
-    console.log('[Dashboard] Using VITE_API_URL:', import.meta.env.VITE_API_URL);
-    return import.meta.env.VITE_API_URL;
-  }
-  
-  // Auto-detect: Check if we're in a subdirectory and use that path
-  const origin = window.location.origin;
-  const pathname = window.location.pathname;
-  
-  // Check if pathname contains a known prefix (e.g., /ringba-sync-dashboard)
-  if (pathname.includes('/ringba-sync-dashboard')) {
-    const basePath = pathname.substring(0, pathname.lastIndexOf('/ringba-sync-dashboard') + '/ringba-sync-dashboard'.length);
-    const apiUrl = origin + basePath;
-    console.log('[Dashboard] Auto-detected API URL (with path prefix):', apiUrl);
-    return apiUrl;
-  }
-  
-  // Development/localhost: use current origin
-  const hostname = window.location.hostname;
-  const isLocalhost = hostname === 'localhost' || hostname === '127.0.0.1' || hostname === '';
-  
-  if (isLocalhost) {
-    const devUrl = origin + getBasePath();
-    console.log('[Dashboard] Using current origin (development):', devUrl);
-    return devUrl;
-  }
-  
-  // Production fallback: use same origin
-  console.log('[Dashboard] Using current origin (production fallback):', origin);
-  return origin;
-};
-
 export const BASE_PATH = getBasePath();
-export const API_BASE_URL = getApiBaseUrl();
+export const API_BASE_URL = window.location.origin + BASE_PATH;
 
+// Debug logging
 console.log('[Dashboard] Base path:', BASE_PATH);
 console.log('[Dashboard] API base URL:', API_BASE_URL);
+console.log('[Dashboard] Current pathname:', window.location.pathname);
 console.log('[Dashboard] Current origin:', window.location.origin);
 
 // Fetch wrapper with error handling
