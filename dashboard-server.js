@@ -41,6 +41,15 @@ app.use(cors({
 }));
 app.use(express.json());
 
+// Middleware to rewrite /ringba-sync-dashboard/api/* to /api/* before routes
+app.use((req, res, next) => {
+  if (req.path.startsWith('/ringba-sync-dashboard/api')) {
+    req.url = req.url.replace('/ringba-sync-dashboard', '');
+    console.log('[Route Rewrite]', req.originalUrl, '->', req.url);
+  }
+  next();
+});
+
 // Disable caching for all API routes
 app.use('/api', (req, res, next) => {
   res.set({
@@ -51,8 +60,8 @@ app.use('/api', (req, res, next) => {
   next();
 });
 
-// Serve static files from dashboard-build directory
-app.use(express.static(DASHBOARD_BUILD_DIR));
+// Serve static files from dashboard-build directory at /ringba-sync-dashboard path
+app.use('/ringba-sync-dashboard', express.static(DASHBOARD_BUILD_DIR));
 
 // Helper to send JSON response
 const sendJSON = (res, data, statusCode = 200) => {
@@ -356,7 +365,22 @@ app.get('/api/chargeback', async (req, res) => {
 });
 
 // Catch-all route: serve index.html for React Router
-app.get('*', (req, res) => {
+// Handle both root and /ringba-sync-dashboard paths
+// API routes are handled above via middleware rewrite
+app.get('/', (req, res) => {
+  res.redirect('/ringba-sync-dashboard/');
+});
+
+app.get('/ringba-sync-dashboard', (req, res) => {
+  res.redirect('/ringba-sync-dashboard/');
+});
+
+app.get('/ringba-sync-dashboard/*', (req, res) => {
+  // Skip if this is an API request (shouldn't happen due to middleware rewrite, but safety check)
+  if (req.path.startsWith('/ringba-sync-dashboard/api')) {
+    return res.status(404).json({ error: 'API route not found' });
+  }
+  // For any other path under /ringba-sync-dashboard, serve index.html (SPA routing)
   res.sendFile(join(DASHBOARD_BUILD_DIR, 'index.html'));
 });
 
