@@ -1,5 +1,5 @@
-// HTTP client to fetch campaign results HTML using saved cookies
-import { readSession, isSessionValid } from '../auth/session-store.js';
+// HTTP client to fetch campaign results HTML using saved cookies from PostgreSQL
+import { readSession, isSessionValid, updateSessionStatus } from '../auth/session-store-postgres.js';
 import { detectPagination } from '../scrapers/html-extractor.js';
 
 const defaultHeaders = (referer) => ({
@@ -15,10 +15,24 @@ export const buildCampaignResultsUrl = (baseUrl, dateRange, campaignId = '50033'
   `${baseUrl}/partner_users/campaign_results?caller_phone_number=&end_date=${dateRange.endDateURL}&id=${campaignId}&page=${page}&start_date=${dateRange.startDateURL}`;
 
 export const fetchCampaignResultsHtmlWithSavedSession = async (config, dateRange, campaignId = '50033', page = 1) => {
-  const session = await readSession();
+  // Read session from PostgreSQL database
+  const session = await readSession(config);
   if (!isSessionValid(session)) {
     const err = new Error('Saved auth session is missing or expired');
     err.code = 'SESSION_INVALID';
+    
+    // Update session status if we have a session ID
+    if (session && session.id) {
+      try {
+        await updateSessionStatus(config, session.id, {
+          isWorking: false,
+          lastErrorMessage: 'Session expired or invalid'
+        });
+      } catch (updateError) {
+        console.warn('[WARN] Failed to update session status:', updateError.message);
+      }
+    }
+    
     throw err;
   }
 
@@ -28,23 +42,97 @@ export const fetchCampaignResultsHtmlWithSavedSession = async (config, dateRange
     Cookie: session.cookieHeader,
   };
 
-  const res = await fetch(url, { method: 'GET', headers });
-  if (!res.ok) {
-    const text = await res.text().catch(() => '');
-    const err = new Error(`HTTP ${res.status} ${res.statusText}`);
-    err.details = text.slice(0, 300);
-    throw err;
+  let requestSuccessful = false;
+  try {
+    const res = await fetch(url, { method: 'GET', headers });
+    if (!res.ok) {
+      const text = await res.text().catch(() => '');
+      const err = new Error(`HTTP ${res.status} ${res.statusText}`);
+      err.details = text.slice(0, 300);
+      
+      // Update session status if request failed (might indicate session issue)
+      if (session && session.id && (res.status === 401 || res.status === 403)) {
+        try {
+          await updateSessionStatus(config, session.id, {
+            isWorking: false,
+            lastErrorMessage: `HTTP ${res.status}: ${res.statusText}`,
+            lastChecked: new Date()
+          });
+        } catch (updateError) {
+          console.warn('[WARN] Failed to update session status:', updateError.message);
+        }
+      }
+      
+      throw err;
+    }
+    
+    requestSuccessful = true;
+    const html = await res.text();
+    
+    // Update session status on successful request (increment checked_count, update last_checked)
+    if (session && session.id) {
+      try {
+        await updateSessionStatus(config, session.id, {
+          lastChecked: new Date(),
+          incrementCheckedCount: true
+        });
+      } catch (updateError) {
+        // Non-critical error, just log it
+        console.warn('[WARN] Failed to update session status:', updateError.message);
+      }
+    }
+    
+    return { url, html, page };
+  } catch (error) {
+    // If request failed and we haven't updated session status yet, do it now
+    if (!requestSuccessful && session && session.id && error.code !== 'SESSION_INVALID') {
+      try {
+        await updateSessionStatus(config, session.id, {
+          lastChecked: new Date(),
+          lastErrorMessage: error.message
+        });
+      } catch (updateError) {
+        console.warn('[WARN] Failed to update session status:', updateError.message);
+      }
+    }
+    throw error;
   }
-  return { url, html: await res.text(), page };
 };
 
 // Fetch all pages of campaign results
 export const fetchAllCampaignResultsPages = async (config, dateRange, campaignId = '50033', includeAdjustments = true) => {
-  const session = await readSession();
+  // Read session from PostgreSQL database
+  const session = await readSession(config);
   if (!isSessionValid(session)) {
     const err = new Error('Saved auth session is missing or expired');
     err.code = 'SESSION_INVALID';
+    
+    // Update session status if we have a session ID
+    if (session && session.id) {
+      try {
+        await updateSessionStatus(config, session.id, {
+          isWorking: false,
+          lastErrorMessage: 'Session expired or invalid'
+        });
+      } catch (updateError) {
+        console.warn('[WARN] Failed to update session status:', updateError.message);
+      }
+    }
+    
     throw err;
+  }
+  
+  // Update session status at start of pagination (increment checked_count)
+  if (session && session.id) {
+    try {
+      await updateSessionStatus(config, session.id, {
+        lastChecked: new Date(),
+        incrementCheckedCount: true
+      });
+    } catch (updateError) {
+      // Non-critical error, just log it
+      console.warn('[WARN] Failed to update session status:', updateError.message);
+    }
   }
 
   const allCalls = [];
@@ -148,6 +236,18 @@ export const fetchAllCampaignResultsPages = async (config, dateRange, campaignId
   }
 
   console.log(`[INFO] Completed paginated fetch: ${currentPage - 1} page(s), ${allCalls.length} total calls, ${allAdjustments.length} total adjustments`);
+
+  // Update session status on successful completion
+  if (session && session.id) {
+    try {
+      await updateSessionStatus(config, session.id, {
+        lastChecked: new Date()
+      });
+    } catch (updateError) {
+      // Non-critical error, just log it
+      console.warn('[WARN] Failed to update session status:', updateError.message);
+    }
+  }
 
   return {
     calls: allCalls,

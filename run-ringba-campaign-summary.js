@@ -15,40 +15,39 @@ const __dirname = dirname(__filename);
 dotenv.config({ path: join(__dirname, '.env') });
 
 // Parse date from command line arguments
+// Returns the date string for YYYY-MM-DD format (to avoid timezone issues)
+// Returns Date object for other formats
 const parseDate = (dateStr) => {
   if (!dateStr) return null;
   
-  // Try YYYY-MM-DD format
+  // Try YYYY-MM-DD format - return as string to avoid timezone shifts
   const yyyyMMdd = dateStr.match(/^(\d{4})-(\d{2})-(\d{2})$/);
   if (yyyyMMdd) {
-    const year = parseInt(yyyyMMdd[1], 10);
-    const month = parseInt(yyyyMMdd[2], 10) - 1;
-    const day = parseInt(yyyyMMdd[3], 10);
-    const date = new Date(year, month, day);
-    if (!isNaN(date.getTime())) {
-      return date;
-    }
+    // Return the string directly - service will parse it in UTC
+    return dateStr;
   }
   
-  // Try MM/DD/YYYY format
+  // Try MM/DD/YYYY format - create in UTC
   const mmddyyyy = dateStr.match(/^(\d{1,2})\/(\d{1,2})\/(\d{4})$/);
   if (mmddyyyy) {
     const month = parseInt(mmddyyyy[1], 10) - 1;
     const day = parseInt(mmddyyyy[2], 10);
     const year = parseInt(mmddyyyy[3], 10);
-    const date = new Date(year, month, day);
+    // Create in UTC to avoid timezone shifts
+    const date = new Date(Date.UTC(year, month, day, 0, 0, 0, 0));
     if (!isNaN(date.getTime())) {
       return date;
     }
   }
   
-  // Try DD-MM-YYYY format
+  // Try DD-MM-YYYY format - create in UTC
   const ddMMyyyy = dateStr.match(/^(\d{1,2})-(\d{1,2})-(\d{4})$/);
   if (ddMMyyyy) {
     const day = parseInt(ddMMyyyy[1], 10);
     const month = parseInt(ddMMyyyy[2], 10) - 1;
     const year = parseInt(ddMMyyyy[3], 10);
-    const date = new Date(year, month, day);
+    // Create in UTC to avoid timezone shifts
+    const date = new Date(Date.UTC(year, month, day, 0, 0, 0, 0));
     if (!isNaN(date.getTime())) {
       return date;
     }
@@ -56,13 +55,21 @@ const parseDate = (dateStr) => {
   
   // Try special keywords
   if (dateStr.toLowerCase() === 'today' || dateStr.toLowerCase() === 'current') {
-    return new Date();
+    // Return today in UTC
+    const now = new Date();
+    const year = now.getUTCFullYear();
+    const month = now.getUTCMonth();
+    const day = now.getUTCDate();
+    return new Date(Date.UTC(year, month, day, 0, 0, 0, 0));
   }
   
   if (dateStr.toLowerCase() === 'yesterday') {
-    const date = new Date();
-    date.setDate(date.getDate() - 1);
-    return date;
+    // Return yesterday in UTC
+    const now = new Date();
+    const year = now.getUTCFullYear();
+    const month = now.getUTCMonth();
+    const day = now.getUTCDate() - 1;
+    return new Date(Date.UTC(year, month, day, 0, 0, 0, 0));
   }
   
   return null;

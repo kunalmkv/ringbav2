@@ -14,11 +14,15 @@
     "scrape": "node run-scraper.js",
     "sync:cost": "node run-ringba-cost-sync.js",
     "sync:campaign-summary": "node run-ringba-campaign-summary.js",
+    "auth:refresh": "node run-auth-refresh.js",
+    "auth:migrate": "node migrate-add-auth-sessions-table.js",
     "scheduler": "node src/services/scheduler.js",
     "scheduler:historical": "node start-historical-scheduler.js",
     "scheduler:current": "node start-current-scheduler.js",
     "scheduler:ringba-original": "node start-ringba-original-scheduler.js",
     "scheduler:ringba-cost": "node start-ringba-cost-scheduler.js",
+    "scheduler:auth-refresh": "node start-auth-refresh-scheduler.js",
+    "scheduler:campaign-summary": "node start-campaign-summary-scheduler.js",
     "dashboard": "node dashboard-server.js",
     "start": "node src/services/scheduler.js"
   },
@@ -37,7 +41,8 @@
     "fp-ts": "^2.16.1",
     "node-cron": "^3.0.3",
     "node-fetch": "^3.3.2",
-    "pg": "^8.11.0"
+    "pg": "^8.11.0",
+    "puppeteer": "^24.15.0"
   },
   "engines": {
     "node": ">=18.0.0"

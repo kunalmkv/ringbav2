@@ -128,14 +128,32 @@ const getCallsByCampaignId = async (accountId, apiToken, campaignId, startDate, 
  */
 const fetchCampaignSummary = async (accountId, apiToken, identifier, identifierName, date, useCampaignId = false) => {
   try {
-    // Set date range to cover the entire day (start of day to end of day)
-    const startDate = new Date(date);
-    startDate.setHours(0, 0, 0, 0);
+    // Set date range to cover the entire day (start of day to end of day) in UTC
+    // Extract year, month, day from the date to avoid timezone shifts
+    // If date is a string like "2025-11-21", parse it directly
+    let year, month, day;
     
-    const endDate = new Date(date);
-    endDate.setHours(23, 59, 59, 999);
+    if (typeof date === 'string') {
+      // Parse YYYY-MM-DD format
+      const parts = date.split('-');
+      year = parseInt(parts[0], 10);
+      month = parseInt(parts[1], 10) - 1; // Month is 0-indexed
+      day = parseInt(parts[2], 10);
+    } else {
+      // Extract from Date object using UTC methods to avoid timezone shifts
+      year = date.getUTCFullYear();
+      month = date.getUTCMonth();
+      day = date.getUTCDate();
+    }
     
-    console.log(`[Campaign Summary] Fetching data for ${identifierName} on ${date.toISOString().split('T')[0]}`);
+    // Create start date: YYYY-MM-DD 00:00:00.000 UTC
+    const startDate = new Date(Date.UTC(year, month, day, 0, 0, 0, 0));
+    
+    // Create end date: YYYY-MM-DD 23:59:59.999 UTC
+    const endDate = new Date(Date.UTC(year, month, day, 23, 59, 59, 999));
+    
+    const dateStr = typeof date === 'string' ? date : date.toISOString().split('T')[0];
+    console.log(`[Campaign Summary] Fetching data for ${identifierName} on ${dateStr}`);
     console.log(`[Campaign Summary] Date range: ${startDate.toISOString()} to ${endDate.toISOString()}`);
     
     let calls = [];
@@ -433,8 +451,31 @@ export const syncCampaignSummaryByCampaignId = async (config, campaignId, date =
   const db = dbOps(config);
   
   // Use provided date or default to today
-  const targetDate = date ? new Date(date) : new Date();
-  targetDate.setHours(0, 0, 0, 0);
+  // Parse date and create in UTC to avoid timezone shifts
+  let targetDate;
+  if (date) {
+    if (typeof date === 'string') {
+      // Parse YYYY-MM-DD format and create in UTC
+      const parts = date.split('-');
+      const year = parseInt(parts[0], 10);
+      const month = parseInt(parts[1], 10) - 1;
+      const day = parseInt(parts[2], 10);
+      targetDate = new Date(Date.UTC(year, month, day, 0, 0, 0, 0));
+    } else {
+      // Extract UTC components from Date object to avoid timezone shifts
+      const year = date.getUTCFullYear();
+      const month = date.getUTCMonth();
+      const day = date.getUTCDate();
+      targetDate = new Date(Date.UTC(year, month, day, 0, 0, 0, 0));
+    }
+  } else {
+    // Default to today in UTC
+    const now = new Date();
+    const year = now.getUTCFullYear();
+    const month = now.getUTCMonth();
+    const day = now.getUTCDate();
+    targetDate = new Date(Date.UTC(year, month, day, 0, 0, 0, 0));
+  }
   
   console.log('');
   console.log('='.repeat(70));
@@ -506,8 +547,31 @@ export const syncCampaignSummary = async (config, date = null) => {
   const db = dbOps(config);
   
   // Use provided date or default to today
-  const targetDate = date ? new Date(date) : new Date();
-  targetDate.setHours(0, 0, 0, 0);
+  // Parse date and create in UTC to avoid timezone shifts
+  let targetDate;
+  if (date) {
+    if (typeof date === 'string') {
+      // Parse YYYY-MM-DD format and create in UTC
+      const parts = date.split('-');
+      const year = parseInt(parts[0], 10);
+      const month = parseInt(parts[1], 10) - 1;
+      const day = parseInt(parts[2], 10);
+      targetDate = new Date(Date.UTC(year, month, day, 0, 0, 0, 0));
+    } else {
+      // Extract UTC components from Date object to avoid timezone shifts
+      const year = date.getUTCFullYear();
+      const month = date.getUTCMonth();
+      const day = date.getUTCDate();
+      targetDate = new Date(Date.UTC(year, month, day, 0, 0, 0, 0));
+    }
+  } else {
+    // Default to today in UTC
+    const now = new Date();
+    const year = now.getUTCFullYear();
+    const month = now.getUTCMonth();
+    const day = now.getUTCDate();
+    targetDate = new Date(Date.UTC(year, month, day, 0, 0, 0, 0));
+  }
   
   console.log('');
   console.log('='.repeat(70));
