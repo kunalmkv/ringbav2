@@ -42,19 +42,13 @@ export const getCurrentDayRange = () => {
 // Get current day range with timezone logic (for CST timezone tracking)
 // If it's after 12:00 AM IST (midnight), fetch previous day's data (because CST is behind IST)
 // If it's 12:00 PM IST or later, fetch current day's data
+// IMPORTANT: Uses direct date component manipulation to avoid timezone issues
 export const getCurrentDayRangeWithTimezone = () => {
   // Get current time in IST timezone
   const now = new Date();
   
-  // Use a more reliable method to get IST hours
-  // Convert current UTC time to IST (IST is UTC+5:30)
-  const istOffset = 5.5 * 60 * 60 * 1000; // IST is UTC+5:30
-  const istTime = new Date(now.getTime() + istOffset);
-  const hoursIST = istTime.getUTCHours();
-  
-  // Alternative: Get IST time string and parse it
-  // Some locales may return "24" for midnight, so we handle that
-  const istTimeString = now.toLocaleString('en-US', { 
+  // Get IST date components directly
+  const istDateString = now.toLocaleString('en-US', { 
     timeZone: 'Asia/Kolkata',
     year: 'numeric',
     month: '2-digit',
@@ -65,73 +59,8 @@ export const getCurrentDayRangeWithTimezone = () => {
     hour12: false
   });
   
-  // Parse IST time to get hours (handle "24" as "00")
-  const istParts = istTimeString.match(/(\d{2})\/(\d{2})\/(\d{4}), (\d{2}):(\d{2}):(\d{2})/);
-  let parsedHoursIST = hoursIST; // Default to calculated hours
-  
-  if (istParts) {
-    let parsedHour = parseInt(istParts[4], 10);
-    // Handle edge case where hour is 24 (should be 0 for midnight)
-    if (parsedHour === 24) {
-      parsedHour = 0;
-    }
-    // Use parsed hour if it's valid (0-23)
-    if (parsedHour >= 0 && parsedHour <= 23) {
-      parsedHoursIST = parsedHour;
-    }
-  }
-  
-  // Get the date to fetch based on IST time
-  // If it's after 12:00 AM IST (00:00) and before 12:00 PM IST (12:00), fetch previous day
-  // because CST is behind IST by ~11-12 hours
-  // If it's 12:00 PM IST (12:00) or later, fetch current day
-  let targetDate;
-  if (parsedHoursIST >= 0 && parsedHoursIST < 12) {
-    // It's between 12:00 AM (midnight) and 11:59 AM IST, fetch previous day
-    // (because in CST it's still the previous day)
-    targetDate = new Date();
-    targetDate.setDate(targetDate.getDate() - 1);
-  } else {
-    // It's 12:00 PM (noon) or later IST, fetch current day
-    targetDate = new Date();
-  }
-  
-  // Set to start of day
-  targetDate.setHours(0, 0, 0, 0);
-  
-  // End of day
-  const endDate = new Date(targetDate);
-  endDate.setHours(23, 59, 59, 999);
-  
-  return {
-    startDate: targetDate,
-    endDate,
-    startDateFormatted: formatDateForElocal(targetDate),
-    endDateFormatted: formatDateForElocal(targetDate),
-    startDateURL: formatDateForURL(targetDate),
-    endDateURL: formatDateForURL(targetDate)
-  };
-};
-
-// Get date range for Ringba sync based on IST timezone
-// If it's after 12 AM IST (midnight), fetch previous day's data (because Ringba uses CST which is behind IST)
-// If it's 12 PM IST or later, fetch current day's data
-export const getRingbaSyncDateRange = () => {
-  // Get current time in IST timezone
-  const now = new Date();
-  const istTimeString = now.toLocaleString('en-US', { 
-    timeZone: 'Asia/Kolkata',
-    year: 'numeric',
-    month: '2-digit',
-    day: '2-digit',
-    hour: '2-digit',
-    minute: '2-digit',
-    second: '2-digit',
-    hour12: false
-  });
-  
-  // Parse IST time to get hours
-  const istParts = istTimeString.match(/(\d{2})\/(\d{2})\/(\d{4}), (\d{2}):(\d{2}):(\d{2})/);
+  // Parse IST time string: format is "MM/DD/YYYY, HH:MM:SS"
+  const istParts = istDateString.match(/(\d{2})\/(\d{2})\/(\d{4}), (\d{2}):(\d{2}):(\d{2})/);
   if (!istParts) {
     // Fallback: use current date
     const today = new Date();
@@ -148,29 +77,169 @@ export const getRingbaSyncDateRange = () => {
     };
   }
   
-  const hoursIST = parseInt(istParts[4], 10);
+  // Extract IST components
+  const monthIST = parseInt(istParts[1], 10);  // MM (1-12)
+  const dayIST = parseInt(istParts[2], 10);     // DD
+  const yearIST = parseInt(istParts[3], 10);    // YYYY
+  let hoursIST = parseInt(istParts[4], 10);     // HH (0-23)
   
-  // Get the date to fetch based on IST time
-  // If it's after 12 AM IST (00:00) and before 12 PM IST (12:00), fetch previous day
-  // because CST is behind IST by ~11-12 hours
-  // If it's 12 PM IST (12:00) or later, fetch current day
-  let targetDate;
-  if (hoursIST >= 0 && hoursIST < 12) {
-    // It's between 12:00 AM (midnight) and 11:59 AM IST, fetch previous day
-    // (because in CST it's still the previous day)
-    targetDate = new Date();
-    targetDate.setDate(targetDate.getDate() - 1);
-  } else {
-    // It's 12:00 PM (noon) or later IST, fetch current day
-    targetDate = new Date();
+  // Handle edge case where hour is 24 (should be 0 for midnight)
+  if (hoursIST === 24) {
+    hoursIST = 0;
   }
   
-  // Set to start of day
-  targetDate.setHours(0, 0, 0, 0);
+  // Determine target date based on IST time
+  // Logic: If it's between 12:00 AM (00:00) and 11:59 AM IST, fetch previous day
+  //        If it's 12:00 PM (12:00) or later IST, fetch current day
+  // 
+  // Examples:
+  // - Nov 25, 12:05 AM IST → fetch Nov 24 (yesterday)
+  // - Nov 25, 3:05 AM IST → fetch Nov 24 (yesterday)
+  // - Nov 25, 9:05 PM IST → fetch Nov 25 (today)
   
-  // End of day
-  const endDate = new Date(targetDate);
-  endDate.setHours(23, 59, 59, 999);
+  let targetYear, targetMonth, targetDay;
+  
+  if (hoursIST >= 0 && hoursIST < 12) {
+    // It's between 12:00 AM (midnight) and 11:59 AM IST, fetch previous day
+    // Work directly with date components to avoid timezone issues
+    if (dayIST > 1) {
+      // Simple case: just subtract 1 from day
+      targetYear = yearIST;
+      targetMonth = monthIST;
+      targetDay = dayIST - 1;
+    } else {
+      // Day is 1, need to go to previous month
+      if (monthIST > 1) {
+        // Go to previous month
+        targetYear = yearIST;
+        targetMonth = monthIST - 1;
+        // Get last day of previous month
+        const lastDayOfPrevMonth = new Date(Date.UTC(yearIST, monthIST - 1, 0)).getUTCDate();
+        targetDay = lastDayOfPrevMonth;
+      } else {
+        // Month is January (1), go to December of previous year
+        targetYear = yearIST - 1;
+        targetMonth = 12;
+        // Get last day of December
+        const lastDayOfDec = new Date(Date.UTC(yearIST - 1, 12, 0)).getUTCDate();
+        targetDay = lastDayOfDec;
+      }
+    }
+  } else {
+    // It's 12:00 PM (noon) or later IST, fetch current day
+    targetYear = yearIST;
+    targetMonth = monthIST;
+    targetDay = dayIST;
+  }
+  
+  // Create Date objects using UTC to avoid timezone issues
+  const targetDate = new Date(Date.UTC(targetYear, targetMonth - 1, targetDay, 0, 0, 0, 0));
+  const endDate = new Date(Date.UTC(targetYear, targetMonth - 1, targetDay, 23, 59, 59, 999));
+  
+  return {
+    startDate: targetDate,
+    endDate,
+    startDateFormatted: formatDateForElocal(targetDate),
+    endDateFormatted: formatDateForElocal(targetDate),
+    startDateURL: formatDateForURL(targetDate),
+    endDateURL: formatDateForURL(targetDate)
+  };
+};
+
+// Get date range for Ringba sync based on IST timezone
+// If it's after 12 AM IST (midnight), fetch previous day's data (because Ringba uses CST which is behind IST)
+// If it's 12 PM IST or later, fetch current day's data
+// IMPORTANT: Uses direct date component manipulation to avoid timezone issues
+export const getRingbaSyncDateRange = () => {
+  // Get current time in IST timezone
+  const now = new Date();
+  const istDateString = now.toLocaleString('en-US', { 
+    timeZone: 'Asia/Kolkata',
+    year: 'numeric',
+    month: '2-digit',
+    day: '2-digit',
+    hour: '2-digit',
+    minute: '2-digit',
+    second: '2-digit',
+    hour12: false
+  });
+  
+  // Parse IST time string: format is "MM/DD/YYYY, HH:MM:SS"
+  const istParts = istDateString.match(/(\d{2})\/(\d{2})\/(\d{4}), (\d{2}):(\d{2}):(\d{2})/);
+  if (!istParts) {
+    // Fallback: use current date
+    const today = new Date();
+    today.setHours(0, 0, 0, 0);
+    const endDate = new Date(today);
+    endDate.setHours(23, 59, 59, 999);
+    return {
+      startDate: today,
+      endDate,
+      startDateFormatted: formatDateForElocal(today),
+      endDateFormatted: formatDateForElocal(today),
+      startDateURL: formatDateForURL(today),
+      endDateURL: formatDateForURL(today)
+    };
+  }
+  
+  // Extract IST components
+  const monthIST = parseInt(istParts[1], 10);  // MM (1-12)
+  const dayIST = parseInt(istParts[2], 10);     // DD
+  const yearIST = parseInt(istParts[3], 10);    // YYYY
+  let hoursIST = parseInt(istParts[4], 10);     // HH (0-23)
+  
+  // Handle edge case where hour is 24 (should be 0 for midnight)
+  if (hoursIST === 24) {
+    hoursIST = 0;
+  }
+  
+  // Determine target date based on IST time
+  // Logic: If it's between 12:00 AM (00:00) and 11:59 AM IST, fetch previous day
+  //        If it's 12:00 PM (12:00) or later IST, fetch current day
+  // 
+  // Examples:
+  // - Nov 25, 12:05 AM IST → fetch Nov 24 (yesterday)
+  // - Nov 25, 3:05 AM IST → fetch Nov 24 (yesterday)
+  // - Nov 25, 9:05 PM IST → fetch Nov 25 (today)
+  
+  let targetYear, targetMonth, targetDay;
+  
+  if (hoursIST >= 0 && hoursIST < 12) {
+    // It's between 12:00 AM (midnight) and 11:59 AM IST, fetch previous day
+    // Work directly with date components to avoid timezone issues
+    if (dayIST > 1) {
+      // Simple case: just subtract 1 from day
+      targetYear = yearIST;
+      targetMonth = monthIST;
+      targetDay = dayIST - 1;
+    } else {
+      // Day is 1, need to go to previous month
+      if (monthIST > 1) {
+        // Go to previous month
+        targetYear = yearIST;
+        targetMonth = monthIST - 1;
+        // Get last day of previous month
+        const lastDayOfPrevMonth = new Date(Date.UTC(yearIST, monthIST - 1, 0)).getUTCDate();
+        targetDay = lastDayOfPrevMonth;
+      } else {
+        // Month is January (1), go to December of previous year
+        targetYear = yearIST - 1;
+        targetMonth = 12;
+        // Get last day of December
+        const lastDayOfDec = new Date(Date.UTC(yearIST - 1, 12, 0)).getUTCDate();
+        targetDay = lastDayOfDec;
+      }
+    }
+  } else {
+    // It's 12:00 PM (noon) or later IST, fetch current day
+    targetYear = yearIST;
+    targetMonth = monthIST;
+    targetDay = dayIST;
+  }
+  
+  // Create Date objects using UTC to avoid timezone issues
+  const targetDate = new Date(Date.UTC(targetYear, targetMonth - 1, targetDay, 0, 0, 0, 0));
+  const endDate = new Date(Date.UTC(targetYear, targetMonth - 1, targetDay, 23, 59, 59, 999));
   
   return {
     startDate: targetDate,

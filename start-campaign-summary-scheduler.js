@@ -76,11 +76,15 @@ const getISTTime = () => {
  * (because Ringba uses EST/CST which is behind IST)
  * If it's 12 PM IST (noon) or later, fetch current day
  * Returns date string in YYYY-MM-DD format
+ * 
+ * IMPORTANT: When it's 12:05 AM IST on Nov 25, we want to fetch Nov 24 (yesterday in IST)
  */
 const getCampaignSummaryDate = () => {
   // Get current time in IST timezone
   const now = new Date();
-  const istTimeString = now.toLocaleString('en-US', { 
+  
+  // Get IST date components directly
+  const istDateString = now.toLocaleString('en-US', { 
     timeZone: 'Asia/Kolkata',
     year: 'numeric',
     month: '2-digit',
@@ -91,10 +95,10 @@ const getCampaignSummaryDate = () => {
     hour12: false
   });
   
-  // Parse IST time to get hours
-  const istParts = istTimeString.match(/(\d{2})\/(\d{2})\/(\d{4}), (\d{2}):(\d{2}):(\d{2})/);
+  // Parse IST time string: format is "MM/DD/YYYY, HH:MM:SS"
+  const istParts = istDateString.match(/(\d{2})\/(\d{2})\/(\d{4}), (\d{2}):(\d{2}):(\d{2})/);
   if (!istParts) {
-    // Fallback: use current date
+    // Fallback: use current UTC date
     const today = new Date();
     const year = today.getUTCFullYear();
     const month = String(today.getUTCMonth() + 1).padStart(2, '0');
@@ -102,36 +106,84 @@ const getCampaignSummaryDate = () => {
     return `${year}-${month}-${day}`;
   }
   
-  let hoursIST = parseInt(istParts[4], 10);
-  const dayIST = parseInt(istParts[2], 10);
-  const monthIST = parseInt(istParts[1], 10);
-  const yearIST = parseInt(istParts[3], 10);
+  // Extract IST components
+  const monthIST = parseInt(istParts[1], 10);  // MM (1-12)
+  const dayIST = parseInt(istParts[2], 10);     // DD
+  const yearIST = parseInt(istParts[3], 10);    // YYYY
+  let hoursIST = parseInt(istParts[4], 10);     // HH (0-23)
+  const minutesIST = parseInt(istParts[5], 10); // MM
+  
+  // Debug logging
+  console.log(`[DEBUG] IST Date String: ${istDateString}`);
+  console.log(`[DEBUG] Parsed IST: ${yearIST}-${String(monthIST).padStart(2, '0')}-${String(dayIST).padStart(2, '0')} ${String(hoursIST).padStart(2, '0')}:${String(minutesIST).padStart(2, '0')}`);
   
   // Handle edge case where hour is 24 (should be 0 for midnight)
   if (hoursIST === 24) {
     hoursIST = 0;
   }
   
-  // Get the date to fetch based on IST time
-  // If it's after 12 AM IST (00:00) and before 12 PM IST (12:00), fetch previous day
-  // because EST/CST is behind IST by ~10-11 hours
-  // If it's 12 PM IST (12:00) or later, fetch current day
-  let targetDate;
+  // Determine target date based on IST time
+  // Logic: If it's between 12:00 AM (00:00) and 11:59 AM IST, fetch previous day
+  //        If it's 12:00 PM (12:00) or later IST, fetch current day
+  // 
+  // Examples:
+  // - Nov 25, 12:05 AM IST → fetch Nov 24 (yesterday)
+  // - Nov 25, 3:05 AM IST → fetch Nov 24 (yesterday)
+  // - Nov 25, 6:05 AM IST → fetch Nov 24 (yesterday)
+  // - Nov 25, 9:05 PM IST → fetch Nov 25 (today)
+  
+  let targetYear, targetMonth, targetDay;
+  
   if (hoursIST >= 0 && hoursIST < 12) {
-    // It's between 12:00 AM (midnight) and 11:59 AM IST, fetch previous day
-    // (because in EST/CST it's still the previous day)
-    targetDate = new Date(yearIST, monthIST - 1, dayIST);
-    targetDate.setDate(targetDate.getDate() - 1);
+    // It's between 12:00 AM (midnight) and 11:59 AM IST
+    // We want to fetch "yesterday" in IST terms
+    // Work directly with the date components to avoid timezone issues
+    
+    // Create date components for yesterday
+    if (dayIST > 1) {
+      // Simple case: just subtract 1 from day
+      targetYear = yearIST;
+      targetMonth = monthIST;
+      targetDay = dayIST - 1;
+    } else {
+      // Day is 1, need to go to previous month
+      if (monthIST > 1) {
+        // Go to previous month
+        targetYear = yearIST;
+        targetMonth = monthIST - 1;
+        // Get last day of previous month
+        const lastDayOfPrevMonth = new Date(Date.UTC(yearIST, monthIST - 1, 0)).getUTCDate();
+        targetDay = lastDayOfPrevMonth;
+      } else {
+        // Month is January (1), go to December of previous year
+        targetYear = yearIST - 1;
+        targetMonth = 12;
+        // Get last day of December
+        const lastDayOfDec = new Date(Date.UTC(yearIST - 1, 12, 0)).getUTCDate();
+        targetDay = lastDayOfDec;
+      }
+    }
   } else {
     // It's 12:00 PM (noon) or later IST, fetch current day
-    targetDate = new Date(yearIST, monthIST - 1, dayIST);
+    targetYear = yearIST;
+    targetMonth = monthIST;
+    targetDay = dayIST;
   }
   
   // Format as YYYY-MM-DD
-  const year = targetDate.getFullYear();
-  const month = String(targetDate.getMonth() + 1).padStart(2, '0');
-  const day = String(targetDate.getDate()).padStart(2, '0');
-  return `${year}-${month}-${day}`;
+  const year = String(targetYear);
+  const month = String(targetMonth).padStart(2, '0');
+  const day = String(targetDay).padStart(2, '0');
+  const result = `${year}-${month}-${day}`;
+  
+  // Debug logging
+  console.log(`[DEBUG] Date Calculation:`);
+  console.log(`  - Current IST Date: ${yearIST}-${String(monthIST).padStart(2, '0')}-${String(dayIST).padStart(2, '0')}`);
+  console.log(`  - Current IST Time: ${String(hoursIST).padStart(2, '0')}:${String(minutesIST).padStart(2, '0')}`);
+  console.log(`  - Target Date: ${result}`);
+  console.log(`  - Logic: ${hoursIST >= 0 && hoursIST < 12 ? 'Before noon → Previous day' : 'After noon → Current day'}`);
+  
+  return result;
 };
 
 // Job execution wrapper with error handling
@@ -150,7 +202,11 @@ const executeCampaignSummary = async (config, scheduleName) => {
     const istTime = getISTTime();
     console.log(`[INFO] Current IST Time: ${istTime}`);
     console.log(`[INFO] Target Date: ${targetDateStr} (Ringba EST/CST timezone)`);
-    console.log(`[INFO] Note: If time is after 12:00 AM IST, fetching previous day's data`);
+    console.log(`[INFO] Date Calculation Logic:`);
+    console.log(`  - If time is between 12:00 AM - 11:59 AM IST: Fetch previous day`);
+    console.log(`  - If time is 12:00 PM or later IST: Fetch current day`);
+    console.log(`  - Example: Nov 25, 12:05 AM IST → Fetch Nov 24`);
+    console.log(`  - Example: Nov 25, 9:05 PM IST → Fetch Nov 25`);
     console.log('');
     
     // Execute the campaign summary sync service
