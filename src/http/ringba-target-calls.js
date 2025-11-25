@@ -95,6 +95,8 @@ export const getCallsByTargetId = (accountId, apiToken) => (targetId, options = 
           'Content-Type': 'application/json'
         };
 
+        // Use minimal set of columns known to work with Ringba API
+        // Extended columns like callDuration, talkTime, etc. return "Unknown value column" error
         const body = {
           reportStart: startDate.toISOString(),
           reportEnd: endDate.toISOString(),
@@ -104,63 +106,22 @@ export const getCallsByTargetId = (accountId, apiToken) => (targetId, options = 
             { column: 'callDt', direction: 'desc' }
           ],
           valueColumns: [
+            // Core call identification
             { column: 'inboundCallId' },
             { column: 'callDt' },
             { column: 'targetName' },
             { column: 'targetId' },
+            // Financial data (essential for cost tracking)
             { column: 'conversionAmount' },  // Revenue
-            { column: 'payoutAmount' },      // Payout (this is what we pay to Ringba - the cost)
+            { column: 'payoutAmount' },      // Payout (what we pay to Ringba - the cost)
+            // Call routing
             { column: 'inboundPhoneNumber' },
             { column: 'tag:InboundNumber:Number' }, // Caller ID
+            // Campaign info
             { column: 'campaignName' },
-            { column: 'publisherName' },
-            { column: 'callDuration' },      // Call duration in seconds
-            { column: 'connected' },         // Boolean: true if call connected
-            { column: 'reroutedFromInboundCallId' }, // Original leg pointer (if rerouted)
-            { column: 'rootInboundCallId' }, // Root call ID (for grouped/transferred calls)
-            { column: 'postCallDuration' },  // Post-call duration
-            { column: 'talkTime' },          // Talk time in seconds
-            { column: 'waitTime' },          // Wait time in seconds
-            { column: 'holdTime' },          // Hold time in seconds
-            { column: 'timeToAnswer' },      // Time to answer in seconds
-            { column: 'callStatus' },        // Call status/outcome
-            { column: 'callType' },          // Call type (inbound, outbound, etc.)
-            { column: 'recordingUrl' },       // Recording URL if available
-            { column: 'recordingDuration' }, // Recording duration
-            { column: 'transferCount' },     // Number of transfers
-            { column: 'conferenceCount' },   // Number of conferences
-            { column: 'ivrHandled' },        // IVR handled flag
-            { column: 'duplicate' },         // Duplicate call flag
-            { column: 'blocked' },           // Blocked call flag
-            { column: 'qualityScore' },      // Quality score if available
-            { column: 'callerCity' },        // Caller city
-            { column: 'callerState' },       // Caller state
-            { column: 'callerZip' },         // Caller zip code
-            { column: 'callerCountry' },     // Caller country
-            { column: 'areaCode' },          // Area code
-            { column: 'timeZone' },          // Time zone
-            { column: 'source' },            // Traffic source
-            { column: 'medium' },            // Traffic medium
-            { column: 'keyword' },           // Keyword if available
-            { column: 'referrer' },          // Referrer URL
-            { column: 'landingPage' },       // Landing page URL
-            { column: 'deviceType' },        // Device type (mobile, desktop, etc.)
-            { column: 'browser' },           // Browser if available
-            { column: 'operatingSystem' },   // Operating system
-            { column: 'ipAddress' },         // IP address
-            { column: 'userAgent' },         // User agent
-            { column: 'sessionId' },         // Session ID
-            { column: 'visitorId' },         // Visitor ID
-            { column: 'leadId' },           // Lead ID if available
-            { column: 'conversionId' },      // Conversion ID
-            { column: 'conversionType' },    // Conversion type
-            { column: 'conversionValue' },   // Conversion value (alternative to conversionAmount)
-            { column: 'cost' },              // Cost (alternative to payoutAmount)
-            { column: 'roi' },              // ROI if calculated
-            { column: 'margin' },            // Margin if calculated
-            { column: 'profit' },            // Profit if calculated
-            { column: 'notes' },             // Notes/remarks
-            { column: 'tags' }               // Tags/custom fields
+            { column: 'publisherName' }
+            // NOTE: Extended columns like callDuration, connected, talkTime, etc.
+            // are not supported by Ringba /calllogs API and cause "Unknown value column" errors
           ],
           filters: [
             {
@@ -207,71 +168,29 @@ export const getCallsByTargetId = (accountId, apiToken) => (targetId, options = 
           
           // Ringba cost is what Ringba charges us for the call
           // In Ringba's model: payoutAmount is what we pay to the publisher/affiliate
-          // The cost to us (Ringba's charge) is typically the payoutAmount itself
-          // However, if there's a difference between revenue and payout, that might be Ringba's margin
           // For now, we'll use payoutAmount as the Ringba cost (what we pay)
-          // Note: This is the cost incurred/charged by Ringba for this call
           const ringbaCost = payout; // Payout is the cost we pay to Ringba
           
           const call = {
+            // Core call identification
             inboundCallId: record.inboundCallId || null,
             callDate: record.callDt || null,
             targetId: record.targetId || targetId,
             targetName: record.targetName || targetName,
+            // Financial data
             revenue: revenue,
             payout: payout,
             ringbaCost: ringbaCost, // Cost charged by Ringba (what we pay for this call)
-            callDuration: record.callDuration ? Number(record.callDuration) : null,
-            connected: record.connected !== undefined ? Boolean(record.connected) : null,
-            reroutedFromInboundCallId: record.reroutedFromInboundCallId || null,
-            rootInboundCallId: record.rootInboundCallId || null,
-            postCallDuration: record.postCallDuration ? Number(record.postCallDuration) : null,
-            talkTime: record.talkTime ? Number(record.talkTime) : null,
-            waitTime: record.waitTime ? Number(record.waitTime) : null,
-            holdTime: record.holdTime ? Number(record.holdTime) : null,
-            timeToAnswer: record.timeToAnswer ? Number(record.timeToAnswer) : null,
-            callStatus: record.callStatus || null,
-            callType: record.callType || null,
-            recordingUrl: record.recordingUrl || null,
-            recordingDuration: record.recordingDuration ? Number(record.recordingDuration) : null,
-            transferCount: record.transferCount ? Number(record.transferCount) : 0,
-            conferenceCount: record.conferenceCount ? Number(record.conferenceCount) : 0,
-            ivrHandled: record.ivrHandled !== undefined ? Boolean(record.ivrHandled) : null,
-            duplicate: record.duplicate !== undefined ? Boolean(record.duplicate) : null,
-            blocked: record.blocked !== undefined ? Boolean(record.blocked) : null,
-            qualityScore: record.qualityScore ? Number(record.qualityScore) : null,
-            callerCity: record.callerCity || null,
-            callerState: record.callerState || null,
-            callerZip: record.callerZip || null,
-            callerCountry: record.callerCountry || null,
-            areaCode: record.areaCode || null,
-            timeZone: record.timeZone || null,
-            source: record.source || null,
-            medium: record.medium || null,
-            keyword: record.keyword || null,
-            referrer: record.referrer || null,
-            landingPage: record.landingPage || null,
-            deviceType: record.deviceType || null,
-            browser: record.browser || null,
-            operatingSystem: record.operatingSystem || null,
-            ipAddress: record.ipAddress || null,
-            userAgent: record.userAgent || null,
-            sessionId: record.sessionId || null,
-            visitorId: record.visitorId || null,
-            leadId: record.leadId || null,
-            conversionId: record.conversionId || null,
-            conversionType: record.conversionType || null,
-            conversionValue: record.conversionValue ? Number(record.conversionValue) : null,
-            cost: record.cost ? Number(record.cost) : null,
-            roi: record.roi ? Number(record.roi) : null,
-            margin: record.margin ? Number(record.margin) : null,
-            profit: record.profit ? Number(record.profit) : null,
-            notes: record.notes || null,
-            tags: record.tags || null,
+            // Call routing info
             inboundPhoneNumber: record.inboundPhoneNumber || null,
             callerId: record['tag:InboundNumber:Number'] || null,
+            // Campaign info
             campaignName: record.campaignName || null,
-            publisherName: record.publisherName || null
+            publisherName: record.publisherName || null,
+            // Extended fields (not fetched from API, set to null for compatibility)
+            callDuration: null,
+            connected: null,
+            talkTime: null
           };
 
           allCalls.push(call);
@@ -301,8 +220,6 @@ export const getCallsByTargetId = (accountId, apiToken) => (targetId, options = 
         totalRevenue: allCalls.reduce((sum, call) => sum + call.revenue, 0),
         totalPayout: allCalls.reduce((sum, call) => sum + call.payout, 0),
         totalRingbaCost: allCalls.reduce((sum, call) => sum + (call.ringbaCost || 0), 0), // Total cost charged by Ringba
-        connectedCalls: allCalls.filter(call => call.connected === true).length,
-        totalCallDuration: allCalls.reduce((sum, call) => sum + (call.callDuration || 0), 0),
         averageRevenue: allCalls.length > 0 
           ? allCalls.reduce((sum, call) => sum + call.revenue, 0) / allCalls.length 
           : 0,
@@ -385,7 +302,6 @@ export const getCallsByTargetIdScript = async (targetId, startDate = null, endDa
     console.log(`Target ID: ${summary.targetId || targetId}`);
     console.log(`Target Name: ${summary.targetName || targetName}`);
     console.log(`Total Calls: ${summary.totalCalls}`);
-    console.log(`Connected Calls: ${summary.connectedCalls}`);
     console.log(`Calls with Revenue: ${summary.callsWithRevenue}`);
     console.log(`Calls with Payout: ${summary.callsWithPayout}`);
     console.log(`Calls with Ringba Cost: ${summary.callsWithRingbaCost}`);
@@ -397,7 +313,6 @@ export const getCallsByTargetIdScript = async (targetId, startDate = null, endDa
     console.log(`  Average Revenue: $${summary.averageRevenue.toFixed(2)}`);
     console.log(`  Average Payout: $${summary.averagePayout.toFixed(2)}`);
     console.log(`  Average Ringba Cost: $${summary.averageRingbaCost.toFixed(2)}`);
-    console.log(`  Total Call Duration: ${Math.round(summary.totalCallDuration / 60)} minutes`);
     console.log('');
     console.log(`Date Range: ${summary.dateRange.start} to ${summary.dateRange.end}`);
     console.log('');
@@ -413,8 +328,6 @@ export const getCallsByTargetIdScript = async (targetId, startDate = null, endDa
         console.log(`   Revenue: $${call.revenue.toFixed(2)}`);
         console.log(`   Payout: $${call.payout.toFixed(2)}`);
         console.log(`   Ringba Cost: $${(call.ringbaCost || 0).toFixed(2)}`);
-        console.log(`   Connected: ${call.connected !== null ? (call.connected ? 'Yes' : 'No') : 'N/A'}`);
-        console.log(`   Duration: ${call.callDuration ? call.callDuration + ' seconds' : 'N/A'}`);
         if (call.callerId) console.log(`   Caller: ${call.callerId}`);
         if (call.campaignName) console.log(`   Campaign: ${call.campaignName}`);
       });

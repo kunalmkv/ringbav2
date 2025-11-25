@@ -125,6 +125,16 @@ const main = async () => {
   // Create and start scheduler
   const scheduler = new ElocalScheduler();
   
+  // IMPORTANT: Override the config to only include historical services
+  // This must be done before calling start() which calls initialize()
+  scheduler.config = {
+    ...config,
+    services: config.services.filter(s => s.type === 'historical' && s.enabled)
+  };
+  
+  console.log(`[INFO] Filtered to ${scheduler.config.services.length} historical services only`);
+  console.log('');
+  
   // Setup graceful shutdown
   const shutdown = async () => {
     console.log('');
