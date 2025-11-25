@@ -113,7 +113,54 @@ export const getCallsByTargetId = (accountId, apiToken) => (targetId, options = 
             { column: 'inboundPhoneNumber' },
             { column: 'tag:InboundNumber:Number' }, // Caller ID
             { column: 'campaignName' },
-            { column: 'publisherName' }
+            { column: 'publisherName' },
+            { column: 'callDuration' },      // Call duration in seconds
+            { column: 'connected' },         // Boolean: true if call connected
+            { column: 'reroutedFromInboundCallId' }, // Original leg pointer (if rerouted)
+            { column: 'rootInboundCallId' }, // Root call ID (for grouped/transferred calls)
+            { column: 'postCallDuration' },  // Post-call duration
+            { column: 'talkTime' },          // Talk time in seconds
+            { column: 'waitTime' },          // Wait time in seconds
+            { column: 'holdTime' },          // Hold time in seconds
+            { column: 'timeToAnswer' },      // Time to answer in seconds
+            { column: 'callStatus' },        // Call status/outcome
+            { column: 'callType' },          // Call type (inbound, outbound, etc.)
+            { column: 'recordingUrl' },       // Recording URL if available
+            { column: 'recordingDuration' }, // Recording duration
+            { column: 'transferCount' },     // Number of transfers
+            { column: 'conferenceCount' },   // Number of conferences
+            { column: 'ivrHandled' },        // IVR handled flag
+            { column: 'duplicate' },         // Duplicate call flag
+            { column: 'blocked' },           // Blocked call flag
+            { column: 'qualityScore' },      // Quality score if available
+            { column: 'callerCity' },        // Caller city
+            { column: 'callerState' },       // Caller state
+            { column: 'callerZip' },         // Caller zip code
+            { column: 'callerCountry' },     // Caller country
+            { column: 'areaCode' },          // Area code
+            { column: 'timeZone' },          // Time zone
+            { column: 'source' },            // Traffic source
+            { column: 'medium' },            // Traffic medium
+            { column: 'keyword' },           // Keyword if available
+            { column: 'referrer' },          // Referrer URL
+            { column: 'landingPage' },       // Landing page URL
+            { column: 'deviceType' },        // Device type (mobile, desktop, etc.)
+            { column: 'browser' },           // Browser if available
+            { column: 'operatingSystem' },   // Operating system
+            { column: 'ipAddress' },         // IP address
+            { column: 'userAgent' },         // User agent
+            { column: 'sessionId' },         // Session ID
+            { column: 'visitorId' },         // Visitor ID
+            { column: 'leadId' },           // Lead ID if available
+            { column: 'conversionId' },      // Conversion ID
+            { column: 'conversionType' },    // Conversion type
+            { column: 'conversionValue' },   // Conversion value (alternative to conversionAmount)
+            { column: 'cost' },              // Cost (alternative to payoutAmount)
+            { column: 'roi' },              // ROI if calculated
+            { column: 'margin' },            // Margin if calculated
+            { column: 'profit' },            // Profit if calculated
+            { column: 'notes' },             // Notes/remarks
+            { column: 'tags' }               // Tags/custom fields
           ],
           filters: [
             {
@@ -174,8 +221,53 @@ export const getCallsByTargetId = (accountId, apiToken) => (targetId, options = 
             revenue: revenue,
             payout: payout,
             ringbaCost: ringbaCost, // Cost charged by Ringba (what we pay for this call)
-            connected: null, // Not available in API response
             callDuration: record.callDuration ? Number(record.callDuration) : null,
+            connected: record.connected !== undefined ? Boolean(record.connected) : null,
+            reroutedFromInboundCallId: record.reroutedFromInboundCallId || null,
+            rootInboundCallId: record.rootInboundCallId || null,
+            postCallDuration: record.postCallDuration ? Number(record.postCallDuration) : null,
+            talkTime: record.talkTime ? Number(record.talkTime) : null,
+            waitTime: record.waitTime ? Number(record.waitTime) : null,
+            holdTime: record.holdTime ? Number(record.holdTime) : null,
+            timeToAnswer: record.timeToAnswer ? Number(record.timeToAnswer) : null,
+            callStatus: record.callStatus || null,
+            callType: record.callType || null,
+            recordingUrl: record.recordingUrl || null,
+            recordingDuration: record.recordingDuration ? Number(record.recordingDuration) : null,
+            transferCount: record.transferCount ? Number(record.transferCount) : 0,
+            conferenceCount: record.conferenceCount ? Number(record.conferenceCount) : 0,
+            ivrHandled: record.ivrHandled !== undefined ? Boolean(record.ivrHandled) : null,
+            duplicate: record.duplicate !== undefined ? Boolean(record.duplicate) : null,
+            blocked: record.blocked !== undefined ? Boolean(record.blocked) : null,
+            qualityScore: record.qualityScore ? Number(record.qualityScore) : null,
+            callerCity: record.callerCity || null,
+            callerState: record.callerState || null,
+            callerZip: record.callerZip || null,
+            callerCountry: record.callerCountry || null,
+            areaCode: record.areaCode || null,
+            timeZone: record.timeZone || null,
+            source: record.source || null,
+            medium: record.medium || null,
+            keyword: record.keyword || null,
+            referrer: record.referrer || null,
+            landingPage: record.landingPage || null,
+            deviceType: record.deviceType || null,
+            browser: record.browser || null,
+            operatingSystem: record.operatingSystem || null,
+            ipAddress: record.ipAddress || null,
+            userAgent: record.userAgent || null,
+            sessionId: record.sessionId || null,
+            visitorId: record.visitorId || null,
+            leadId: record.leadId || null,
+            conversionId: record.conversionId || null,
+            conversionType: record.conversionType || null,
+            conversionValue: record.conversionValue ? Number(record.conversionValue) : null,
+            cost: record.cost ? Number(record.cost) : null,
+            roi: record.roi ? Number(record.roi) : null,
+            margin: record.margin ? Number(record.margin) : null,
+            profit: record.profit ? Number(record.profit) : null,
+            notes: record.notes || null,
+            tags: record.tags || null,
             inboundPhoneNumber: record.inboundPhoneNumber || null,
             callerId: record['tag:InboundNumber:Number'] || null,
             campaignName: record.campaignName || null,

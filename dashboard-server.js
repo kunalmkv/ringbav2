@@ -164,6 +164,74 @@ const fetchPayoutComparisonData = async (startDate = null, endDate = null) => {
       }
     });
     
+    // Get Google Ads spend data from ringba_campaign_summary table
+    // We'll get the spend from the "Appliance Repair" combined summary (campaign_name = 'Appliance Repair')
+    let googleAdsQuery = `SELECT summary_date::text as date, google_ads_spend, google_ads_notes FROM ringba_campaign_summary WHERE campaign_name = 'Appliance Repair'`;
+    const googleAdsParams = [];
+    let googleAdsParamIndex = 1;
+    
+    if (startDate && endDate) {
+      googleAdsQuery += ` AND summary_date >= $${googleAdsParamIndex} AND summary_date <= $${googleAdsParamIndex + 1}`;
+      googleAdsParams.push(startDate, endDate);
+      googleAdsParamIndex += 2;
+    } else if (startDate) {
+      googleAdsQuery += ` AND summary_date >= $${googleAdsParamIndex}`;
+      googleAdsParams.push(startDate);
+      googleAdsParamIndex += 1;
+    } else if (endDate) {
+      googleAdsQuery += ` AND summary_date <= $${googleAdsParamIndex}`;
+      googleAdsParams.push(endDate);
+      googleAdsParamIndex += 1;
+    }
+    
+    googleAdsQuery += ` ORDER BY summary_date DESC`;
+    
+    console.log('[DB Query] Executing Google Ads spend query:', googleAdsQuery);
+    const googleAdsResult = await client.query(googleAdsQuery, googleAdsParams);
+    console.log(`[DB Query] Google Ads spend query returned ${googleAdsResult.rows.length} rows`);
+    
+    // Build Google Ads spend map by date (including notes)
+    const googleAdsSpendByDate = {};
+    const googleAdsNotesByDate = {};
+    googleAdsResult.rows.forEach(row => {
+      const dateStr = String(row.date).trim();
+      googleAdsSpendByDate[dateStr] = parseFloat(row.google_ads_spend) || 0;
+      googleAdsNotesByDate[dateStr] = row.google_ads_notes || null;
+    });
+    
+    // Get Telco data from ringba_campaign_summary table
+    // We'll get insights_total_cost from the "Appliance Repair" combined summary (campaign_name = 'Appliance Repair')
+    let telcoQuery = `SELECT summary_date::text as date, insights_total_cost FROM ringba_campaign_summary WHERE campaign_name = 'Appliance Repair'`;
+    const telcoParams = [];
+    let telcoParamIndex = 1;
+    
+    if (startDate && endDate) {
+      telcoQuery += ` AND summary_date >= $${telcoParamIndex} AND summary_date <= $${telcoParamIndex + 1}`;
+      telcoParams.push(startDate, endDate);
+      telcoParamIndex += 2;
+    } else if (startDate) {
+      telcoQuery += ` AND summary_date >= $${telcoParamIndex}`;
+      telcoParams.push(startDate);
+      telcoParamIndex += 1;
+    } else if (endDate) {
+      telcoQuery += ` AND summary_date <= $${telcoParamIndex}`;
+      telcoParams.push(endDate);
+      telcoParamIndex += 1;
+    }
+    
+    telcoQuery += ` ORDER BY summary_date DESC`;
+    
+    console.log('[DB Query] Executing Telco query (using insights_total_cost):', telcoQuery);
+    const telcoResult = await client.query(telcoQuery, telcoParams);
+    console.log(`[DB Query] Telco query returned ${telcoResult.rows.length} rows`);
+    
+    // Build Telco map by date (using insights_total_cost)
+    const telcoByDate = {};
+    telcoResult.rows.forEach(row => {
+      const dateStr = String(row.date).trim();
+      telcoByDate[dateStr] = parseFloat(row.insights_total_cost) || 0;
+    });
+    
     // Process results - group by date
     const dataByDate = {};
     
@@ -182,6 +250,9 @@ const fetchPayoutComparisonData = async (startDate = null, endDate = null) => {
           elocal_total: 0,
           total_calls: 0,
           rpc: rpcByDate[date] || 0,
+          google_ads_spend: googleAdsSpendByDate[date] || 0,
+          google_ads_notes: googleAdsNotesByDate[date] || null,
+          telco: telcoByDate[date] || 0,
           adjustments: 0,
           adjustment_static_pct: 0,
           adjustment_api_pct: 0,
@@ -206,11 +277,44 @@ const fetchPayoutComparisonData = async (startDate = null, endDate = null) => {
       dataByDate[date].total_calls += callCount;
     }
     
+    // Add dates that have Google Ads spend or Telco but no call data
+    const allDates = new Set([...Object.keys(googleAdsSpendByDate), ...Object.keys(telcoByDate)]);
+    allDates.forEach(date => {
+      if (!dataByDate[date]) {
+        dataByDate[date] = {
+          date: date,
+          ringba_static: 0,
+          ringba_api: 0,
+          elocal_static: 0,
+          elocal_api: 0,
+          ringba_total: 0,
+          elocal_total: 0,
+          total_calls: 0,
+          rpc: rpcByDate[date] || 0,
+          google_ads_spend: googleAdsSpendByDate[date] || 0,
+          google_ads_notes: googleAdsNotesByDate[date] || null,
+          telco: telcoByDate[date] || 0,
+          adjustments: 0,
+          adjustment_static_pct: 0,
+          adjustment_api_pct: 0,
+          adjustment_pct: 0
+        };
+      } else {
+        // Ensure telco is set even if date already exists
+        if (!dataByDate[date].telco) {
+          dataByDate[date].telco = telcoByDate[date] || 0;
+        }
+      }
+    });
+    
     // Calculate totals and adjustments
     const processedData = Object.values(dataByDate).map(item => {
       item.ringba_total = item.ringba_static + item.ringba_api;
       item.elocal_total = item.elocal_static + item.elocal_api;
       item.rpc = rpcByDate[item.date] || 0;
+      item.google_ads_spend = googleAdsSpendByDate[item.date] || 0;
+      item.google_ads_notes = googleAdsNotesByDate[item.date] || null;
+      item.telco = telcoByDate[item.date] || 0;
       
       // Adjustments
       item.adjustments = item.ringba_total - item.elocal_total;
@@ -361,6 +465,165 @@ app.get('/api/chargeback', async (req, res) => {
     });
   } catch (error) {
     sendError(res, error.message, 500);
+  }
+});
+
+// Google Ads Spend endpoints
+// GET: Fetch Google Ads spend for a date range (from ringba_campaign_summary)
+app.get('/api/google-ads-spend', async (req, res) => {
+  let client = null;
+  try {
+    const { startDate, endDate } = req.query;
+    console.log('[API] /api/google-ads-spend GET called', { startDate, endDate });
+    
+    client = await pool.connect();
+    
+    // Get spend from "Appliance Repair" combined summary
+    let query = `SELECT summary_date::text as date, google_ads_spend as spend_amount, google_ads_notes as notes, updated_at 
+                 FROM ringba_campaign_summary 
+                 WHERE campaign_name = 'Appliance Repair'`;
+    const params = [];
+    
+    if (startDate && endDate) {
+      query += ' AND summary_date >= $1 AND summary_date <= $2';
+      params.push(startDate, endDate);
+    } else if (startDate) {
+      query += ' AND summary_date >= $1';
+      params.push(startDate);
+    } else if (endDate) {
+      query += ' AND summary_date <= $1';
+      params.push(endDate);
+    }
+    
+    query += ' ORDER BY summary_date DESC';
+    
+    const result = await client.query(query, params);
+    
+    sendJSON(res, {
+      data: result.rows,
+      total: result.rows.length
+    });
+  } catch (error) {
+    console.error('[API Error] Failed to fetch Google Ads spend:', error);
+    sendError(res, `Failed to fetch data: ${error.message}`, 500);
+  } finally {
+    if (client) client.release();
+  }
+});
+
+// POST/PUT: Add or update Google Ads spend for a specific date
+// Updates the "Appliance Repair" combined summary record for that date
+app.post('/api/google-ads-spend', async (req, res) => {
+  let client = null;
+  try {
+    const { date, spend_amount, notes } = req.body;
+    console.log('[API] /api/google-ads-spend POST called', { date, spend_amount, notes });
+    
+    if (!date) {
+      return sendError(res, 'Date is required', 400);
+    }
+    
+    if (spend_amount === undefined || spend_amount === null) {
+      return sendError(res, 'Spend amount is required', 400);
+    }
+    
+    const spendAmount = parseFloat(spend_amount);
+    if (isNaN(spendAmount) || spendAmount < 0) {
+      return sendError(res, 'Spend amount must be a valid positive number', 400);
+    }
+    
+    client = await pool.connect();
+    
+    // Check if "Appliance Repair" summary exists for this date
+    const checkQuery = `SELECT id FROM ringba_campaign_summary WHERE campaign_name = 'Appliance Repair' AND summary_date = $1`;
+    const checkResult = await client.query(checkQuery, [date]);
+    
+    if (checkResult.rows.length === 0) {
+      // Create a new summary record if it doesn't exist
+      const insertQuery = `
+        INSERT INTO ringba_campaign_summary (
+          campaign_name, summary_date, google_ads_spend, google_ads_notes, updated_at
+        )
+        VALUES ('Appliance Repair', $1, $2, $3, CURRENT_TIMESTAMP)
+        RETURNING id, summary_date::text as date, google_ads_spend as spend_amount, google_ads_notes as notes, updated_at
+      `;
+      const insertResult = await client.query(insertQuery, [date, spendAmount, notes || null]);
+      
+      console.log('[API] Google Ads spend saved (new record):', insertResult.rows[0]);
+      
+      sendJSON(res, {
+        success: true,
+        data: insertResult.rows[0],
+        message: 'Google Ads spend saved successfully'
+      });
+    } else {
+      // Update existing record
+      const updateQuery = `
+        UPDATE ringba_campaign_summary
+        SET google_ads_spend = $1,
+            google_ads_notes = $2,
+            updated_at = CURRENT_TIMESTAMP
+        WHERE campaign_name = 'Appliance Repair' AND summary_date = $3
+        RETURNING id, summary_date::text as date, google_ads_spend as spend_amount, google_ads_notes as notes, updated_at
+      `;
+      
+      const updateResult = await client.query(updateQuery, [spendAmount, notes || null, date]);
+      
+      console.log('[API] Google Ads spend updated:', updateResult.rows[0]);
+      
+      sendJSON(res, {
+        success: true,
+        data: updateResult.rows[0],
+        message: 'Google Ads spend updated successfully'
+      });
+    }
+  } catch (error) {
+    console.error('[API Error] Failed to save Google Ads spend:', error);
+    sendError(res, `Failed to save data: ${error.message}`, 500);
+  } finally {
+    if (client) client.release();
+  }
+});
+
+// DELETE: Delete Google Ads spend for a specific date (sets to 0)
+app.delete('/api/google-ads-spend/:date', async (req, res) => {
+  let client = null;
+  try {
+    const { date } = req.params;
+    console.log('[API] /api/google-ads-spend DELETE called', { date });
+    
+    if (!date) {
+      return sendError(res, 'Date is required', 400);
+    }
+    
+    client = await pool.connect();
+    
+    // Update the record to set spend to 0 and clear notes
+    const query = `
+      UPDATE ringba_campaign_summary
+      SET google_ads_spend = 0,
+          google_ads_notes = NULL,
+          updated_at = CURRENT_TIMESTAMP
+      WHERE campaign_name = 'Appliance Repair' AND summary_date = $1
+      RETURNING id, summary_date::text as date, google_ads_spend as spend_amount, google_ads_notes as notes
+    `;
+    
+    const result = await client.query(query, [date]);
+    
+    if (result.rows.length === 0) {
+      return sendError(res, 'No record found for the specified date', 404);
+    }
+    
+    sendJSON(res, {
+      success: true,
+      message: 'Google Ads spend cleared successfully',
+      data: result.rows[0]
+    });
+  } catch (error) {
+    console.error('[API Error] Failed to delete Google Ads spend:', error);
+    sendError(res, `Failed to delete data: ${error.message}`, 500);
+  } finally {
+    if (client) client.release();
   }
 });
 

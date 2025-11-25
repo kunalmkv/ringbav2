@@ -106,6 +106,8 @@ CREATE TABLE IF NOT EXISTS ringba_campaign_summary (
     total_call_length_seconds INTEGER DEFAULT 0, -- TCL in seconds
     average_call_length_seconds DECIMAL(10, 2) DEFAULT 0, -- ACL in seconds
     total_cost DECIMAL(10, 2) DEFAULT 0,
+    insights_total_cost DECIMAL(10, 2) DEFAULT 0, -- Total cost from Insights API
+    telco DECIMAL(10, 2) DEFAULT 0, -- Telco cost (same as total_cost)
     no_connections INTEGER DEFAULT 0,
     duplicates INTEGER DEFAULT 0,
     blocked INTEGER DEFAULT 0,
@@ -113,6 +115,36 @@ CREATE TABLE IF NOT EXISTS ringba_campaign_summary (
     profit DECIMAL(10, 2) DEFAULT 0,
     margin DECIMAL(10, 2) DEFAULT 0, -- Margin percentage
     conversion_rate DECIMAL(10, 2) DEFAULT 0, -- Conversion rate percentage
+    google_ads_spend DECIMAL(10, 2) DEFAULT 0, -- Google Ads spend (manually entered)
+    google_ads_notes TEXT, -- Notes for Google Ads spend
+    -- Extended metrics (added via migration)
+    connected_calls INTEGER DEFAULT 0, -- Number of connected calls
+    connection_rate DECIMAL(10, 2) DEFAULT 0, -- Connection rate percentage
+    total_talk_time INTEGER DEFAULT 0, -- Total talk time in seconds
+    average_talk_time DECIMAL(10, 2) DEFAULT 0, -- Average talk time in seconds
+    total_wait_time INTEGER DEFAULT 0, -- Total wait time in seconds
+    average_wait_time DECIMAL(10, 2) DEFAULT 0, -- Average wait time in seconds
+    total_hold_time INTEGER DEFAULT 0, -- Total hold time in seconds
+    average_hold_time DECIMAL(10, 2) DEFAULT 0, -- Average hold time in seconds
+    total_time_to_answer INTEGER DEFAULT 0, -- Total time to answer in seconds
+    average_time_to_answer DECIMAL(10, 2) DEFAULT 0, -- Average time to answer in seconds
+    total_post_call_duration INTEGER DEFAULT 0, -- Total post-call duration in seconds
+    average_post_call_duration DECIMAL(10, 2) DEFAULT 0, -- Average post-call duration in seconds
+    calls_with_recordings INTEGER DEFAULT 0, -- Number of calls with recordings
+    total_recording_duration INTEGER DEFAULT 0, -- Total recording duration in seconds
+    average_recording_duration DECIMAL(10, 2) DEFAULT 0, -- Average recording duration in seconds
+    total_transfers INTEGER DEFAULT 0, -- Total number of transfers
+    average_transfers DECIMAL(10, 2) DEFAULT 0, -- Average transfers per call
+    total_conferences INTEGER DEFAULT 0, -- Total number of conferences
+    average_conferences DECIMAL(10, 2) DEFAULT 0, -- Average conferences per call
+    rerouted_calls INTEGER DEFAULT 0, -- Number of rerouted calls
+    root_calls INTEGER DEFAULT 0, -- Number of root calls
+    average_quality_score DECIMAL(10, 2), -- Average quality score (nullable)
+    top_states TEXT, -- Top states JSON
+    top_cities TEXT, -- Top cities JSON
+    device_type_distribution TEXT, -- Device type distribution JSON
+    source_distribution TEXT, -- Source distribution JSON
+    medium_distribution TEXT, -- Medium distribution JSON
     created_at TIMESTAMP DEFAULT CURRENT_TIMESTAMP,
     updated_at TIMESTAMP DEFAULT CURRENT_TIMESTAMP,
     UNIQUE(campaign_name, summary_date)

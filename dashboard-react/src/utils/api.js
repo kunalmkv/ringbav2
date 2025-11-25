@@ -111,6 +111,31 @@ export const api = {
     if (startDate) params.append('startDate', startDate);
     if (endDate) params.append('endDate', endDate);
     return fetchAPI(`/api/payout-comparison?${params.toString()}`);
+  },
+  // Google Ads Spend endpoints
+  getGoogleAdsSpend: (startDate = null, endDate = null) => {
+    const params = new URLSearchParams();
+    if (startDate) params.append('startDate', startDate);
+    if (endDate) params.append('endDate', endDate);
+    return fetchAPI(`/api/google-ads-spend?${params.toString()}`);
+  },
+  saveGoogleAdsSpend: (date, spendAmount, notes = null) => {
+    return fetchAPI('/api/google-ads-spend', {
+      method: 'POST',
+      headers: {
+        'Content-Type': 'application/json'
+      },
+      body: JSON.stringify({
+        date,
+        spend_amount: spendAmount,
+        notes
+      })
+    });
+  },
+  deleteGoogleAdsSpend: (date) => {
+    return fetchAPI(`/api/google-ads-spend/${date}`, {
+      method: 'DELETE'
+    });
   }
 };
 

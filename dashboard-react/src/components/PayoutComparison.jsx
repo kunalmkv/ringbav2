@@ -7,6 +7,8 @@ const PayoutComparison = () => {
   const [error, setError] = useState(null);
   const [startDate, setStartDate] = useState('');
   const [endDate, setEndDate] = useState('');
+  const [editModal, setEditModal] = useState({ isOpen: false, date: null, spend: 0, notes: '' });
+  const [saving, setSaving] = useState(false);
 
   // Format date from YYYY-MM-DD to DD/MM/YYYY
   const formatDate = (dateStr) => {
@@ -102,6 +104,44 @@ const PayoutComparison = () => {
     fetchData();
   };
 
+  // Handle opening edit modal
+  const handleEditClick = (date, currentSpend = 0, currentNotes = '') => {
+    setEditModal({
+      isOpen: true,
+      date: date,
+      spend: currentSpend || 0,
+      notes: currentNotes || ''
+    });
+  };
+
+  // Handle closing edit modal
+  const handleCloseModal = () => {
+    setEditModal({ isOpen: false, date: null, spend: 0, notes: '' });
+  };
+
+  // Handle saving Google Ads spend
+  const handleSaveSpend = async () => {
+    if (!editModal.date) return;
+    
+    setSaving(true);
+    try {
+      await api.saveGoogleAdsSpend(
+        editModal.date,
+        parseFloat(editModal.spend) || 0,
+        editModal.notes || null
+      );
+      
+      // Refresh data after saving
+      await fetchData();
+      handleCloseModal();
+    } catch (err) {
+      console.error('[PayoutComparison] Error saving Google Ads spend:', err);
+      setError(`Failed to save Google Ads spend: ${err.message}`);
+    } finally {
+      setSaving(false);
+    }
+  };
+
   // Get row class based on adjustments
   const getRowClass = (adjustments) => {
     const adj = parseFloat(adjustments) || 0;
@@ -182,9 +222,14 @@ const PayoutComparison = () => {
               <th colSpan="2" className="col-group">E-Local</th>
               <th rowSpan="2" className="col-total">Ringba Total</th>
               <th rowSpan="2" className="col-total">Elocal Total</th>
+              <th colSpan="4" className="col-group">Revenue</th>
               <th rowSpan="2" className="col-amount">Raw Call</th>
               <th rowSpan="2" className="col-amount">RPC</th>
-              <th colSpan="4" className="col-group">Revenue</th>
+              <th rowSpan="2" className="col-amount">Google Ads Spend</th>
+              <th rowSpan="2" className="col-amount">Telco</th>
+              <th rowSpan="2" className="col-amount">Cost Per Call</th>
+              <th rowSpan="2" className="col-amount">Net</th>
+              <th rowSpan="2" className="col-amount">Net Profit</th>
             </tr>
             <tr>
               <th className="col-sub">Static</th>
@@ -200,21 +245,37 @@ const PayoutComparison = () => {
           <tbody>
             {loading ? (
               <tr>
-                <td colSpan="13" className="no-data">Loading data...</td>
+                <td colSpan="18" className="no-data">Loading data...</td>
               </tr>
             ) : error ? (
               <tr>
-                <td colSpan="13" className="no-data" style={{color: 'red'}}>
+                <td colSpan="18" className="no-data" style={{color: 'red'}}>
                   Error: {error}
                 </td>
               </tr>
             ) : data.length === 0 ? (
               <tr>
-                <td colSpan="13" className="no-data">No data available</td>
+                <td colSpan="18" className="no-data">No data available</td>
               </tr>
             ) : (
               data.map((row, index) => {
                 console.log(`[PayoutComparison] Rendering row ${index}:`, row.date);
+                
+                // Calculate the three new metrics
+                const rawCalls = row.total_calls || 0;
+                const googleAdsSpend = parseFloat(row.google_ads_spend) || 0;
+                const telco = parseFloat(row.telco) || 0;
+                const elocalTotal = parseFloat(row.elocal_total) || 0;
+                
+                // i) Cost per call = Google Ads Spend / Raw Call
+                const costPerCall = rawCalls > 0 ? googleAdsSpend / rawCalls : 0;
+                
+                // ii) Net = Elocal Total - Google Ads Spend - Telco
+                const net = elocalTotal - googleAdsSpend - telco;
+                
+                // iii) Net Profit = Net / Elocal Total (as percentage)
+                const netProfit = elocalTotal > 0 ? (net / elocalTotal) * 100 : 0;
+                
                 return (
                   <tr key={`${row.date}-${index}`} className={getRowClass(row.adjustments)}>
                     <td className="col-date">{formatDate(row.date)}</td>
@@ -224,8 +285,6 @@ const PayoutComparison = () => {
                     <td className="col-amount">{formatCurrency(row.elocal_api)}</td>
                     <td className="col-amount">{formatCurrency(row.ringba_total)}</td>
                     <td className="col-amount">{formatCurrency(row.elocal_total)}</td>
-                    <td className="col-amount">{row.total_calls || 0}</td>
-                    <td className="col-amount">{formatCurrency(row.rpc)}</td>
                     <td className={`col-amount ${row.adjustments < 0 ? 'negative' : row.adjustments > 0 ? 'positive' : ''}`}>
                       {formatCurrency(row.adjustments)}
                     </td>
@@ -234,6 +293,28 @@ const PayoutComparison = () => {
                     <td className={`col-percentage ${row.adjustment_pct < 0 ? 'negative' : row.adjustment_pct > 0 ? 'positive' : ''}`}>
                       {formatPercentage(row.adjustment_pct)}
                     </td>
+                    <td className="col-amount">{rawCalls}</td>
+                    <td className="col-amount">{formatCurrency(row.rpc)}</td>
+                    <td className="col-amount col-google-ads">
+                      <div style={{ display: 'flex', alignItems: 'center', justifyContent: 'center', gap: '0.5rem' }}>
+                        <span>{formatCurrency(googleAdsSpend)}</span>
+                        <button
+                          onClick={() => handleEditClick(row.date, row.google_ads_spend || 0, row.google_ads_notes || '')}
+                          className="btn-edit-spend"
+                          title="Edit Google Ads Spend"
+                        >
+                          ✏️
+                        </button>
+                      </div>
+                    </td>
+                    <td className="col-amount">{formatCurrency(telco)}</td>
+                    <td className="col-amount">{formatCurrency(costPerCall)}</td>
+                    <td className={`col-amount ${net < 0 ? 'negative' : net > 0 ? 'positive' : ''}`}>
+                      {formatCurrency(net)}
+                    </td>
+                    <td className={`col-percentage ${netProfit < 0 ? 'negative' : netProfit > 0 ? 'positive' : ''}`}>
+                      {formatPercentage(netProfit)}
+                    </td>
                   </tr>
                 );
               })
@@ -241,6 +322,67 @@ const PayoutComparison = () => {
           </tbody>
         </table>
       </div>
+
+      {/* Edit Modal for Google Ads Spend */}
+      {editModal.isOpen && (
+        <div className="modal-overlay" onClick={handleCloseModal}>
+          <div className="modal-content" onClick={(e) => e.stopPropagation()}>
+            <div className="modal-header">
+              <h3>Edit Google Ads Spend</h3>
+              <button className="modal-close" onClick={handleCloseModal}>×</button>
+            </div>
+            <div className="modal-body">
+              <div className="form-group">
+                <label>Date:</label>
+                <input
+                  type="text"
+                  value={formatDate(editModal.date)}
+                  disabled
+                  className="form-input"
+                />
+              </div>
+              <div className="form-group">
+                <label>Spend Amount ($):</label>
+                <input
+                  type="number"
+                  step="0.01"
+                  min="0"
+                  value={editModal.spend}
+                  onChange={(e) => setEditModal({ ...editModal, spend: e.target.value })}
+                  className="form-input"
+                  placeholder="0.00"
+                />
+              </div>
+              <div className="form-group">
+                <label>Notes (optional):</label>
+                <textarea
+                  value={editModal.notes}
+                  onChange={(e) => setEditModal({ ...editModal, notes: e.target.value })}
+                  className="form-textarea"
+                  placeholder="Add any notes about this spend..."
+                  rows="3"
+                />
+              </div>
+            </div>
+            <div className="modal-footer">
+              <button
+                onClick={handleCloseModal}
+                className="btn btn-secondary"
+                disabled={saving}
+              >
+                Cancel
+              </button>
+              <button
+                onClick={handleSaveSpend}
+                className="btn btn-primary"
+                disabled={saving}
+              >
+                {saving ? 'Saving...' : 'Save'}
+              </button>
+            </div>
+          </div>
+        </div>
+      )}
     </section>
   );
 };
