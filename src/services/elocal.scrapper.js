@@ -10,6 +10,7 @@ import {
 } from '../utils/helpers.js';
 import {
   getPast10DaysRange,
+  getPast15DaysRangeForHistorical,
   getCurrentDayRange,
   getCurrentDayRangeWithTimezone,
   getDateRangeDescription,
@@ -117,51 +118,12 @@ export const scrapeElocalDataWithDateRange = (config) => (dateRange) => (service
         }
         
         if (includeAdjustments && processedAdjustments.length > 0) {
-          // =====================================================================
-          // FUZZY ADJUSTMENT MERGE LOGIC
-          // =====================================================================
-          // Matches adjustments to calls using multiple criteria:
-          // 1. Same caller ID (exact match)
-          // 2. Same day (date only comparison)
-          // 3. Within ±30 minute time window
-          // 4. Duration match (call.totalDuration === adjustment.duration)
-          //
-          // Scoring system (lower = better match):
-          // - Time difference (in minutes)
-          // - Duration match bonus: -1000 points (strongly prefer duration match)
-          // - Duration mismatch: 0 points (no penalty, but no bonus)
-          // =====================================================================
-          
+          // Fuzzy merge: same caller_id and within ±60 minutes on same day
           const toDate = (s) => { try { return new Date(s); } catch { return null; } };
           const sameDay = (d1, d2) => d1 && d2 && d1.toISOString().substring(0,10) === d2.toISOString().substring(0,10);
           const diffMinutes = (d1, d2) => Math.abs(d1.getTime() - d2.getTime()) / 60000;
           const WINDOW_MIN = 30;
-          const DURATION_MATCH_BONUS = -1000; // Strong bonus for duration match (makes it highest priority)
-          const DURATION_TOLERANCE = 5; // Allow ±5 seconds tolerance for duration match
 
-          // Helper function to check if durations match (with tolerance)
-          const durationsMatch = (callDuration, adjDuration) => {
-            // Handle null/undefined cases
-            if (callDuration == null || adjDuration == null) return false;
-            const callDur = parseInt(callDuration, 10) || 0;
-            const adjDur = parseInt(adjDuration, 10) || 0;
-            // Exact match or within tolerance
-            return Math.abs(callDur - adjDur) <= DURATION_TOLERANCE;
-          };
-
-          // Helper function to calculate match score (lower = better)
-          const calculateMatchScore = (timeDiffMinutes, callDuration, adjDuration) => {
-            let score = timeDiffMinutes; // Base score is time difference
-            
-            // If durations match, apply strong bonus (makes this the best match)
-            if (durationsMatch(callDuration, adjDuration)) {
-              score += DURATION_MATCH_BONUS;
-            }
-            
-            return score;
-          };
-
-          // STEP 1: Index calls by caller ID for fast lookup
           const callerToCalls = new Map();
           for (const c of processedCalls) {
             const list = callerToCalls.get(c.callerId) || [];
@@ -169,103 +131,34 @@ export const scrapeElocalDataWithDateRange = (config) => (dateRange) => (service
             callerToCalls.set(c.callerId, list);
           }
 
-          // STEP 2: Find best matching call for each adjustment
-          const matchMap = new Map(); // key: "callerId|dateOfCall" -> adjustment
-          let matchStats = { total: 0, withDuration: 0, withoutDuration: 0, noMatch: 0 };
-          
+          const matchMap = new Map(); // key: caller|date_of_call
           for (const a of processedAdjustments) {
-            matchStats.total++;
             const adjDt = toDate(a.timeOfCall);
-            const adjDuration = parseInt(a.duration, 10) || 0;
             const candidates = callerToCalls.get(a.callerId) || [];
             let best = null;
-            
             for (const cand of candidates) {
               if (!cand.dt || !adjDt) continue;
-              if (!sameDay(cand.dt, adjDt)) continue; // Must be same day
-              
-              const timeDiff = diffMinutes(cand.dt, adjDt);
-              if (timeDiff > WINDOW_MIN) continue; // Must be within ±30 minutes
-              
-              // Calculate match score (considers both time and duration)
-              const callDuration = cand.totalDuration;
-              const score = calculateMatchScore(timeDiff, callDuration, adjDuration);
-              const durationMatched = durationsMatch(callDuration, adjDuration);
-              
-              // Update best match if this candidate has better score
-              if (!best || score < best.score) {
-                best = { 
-                  score: score, 
-                  diff: timeDiff, 
-                  call: cand,
-                  durationMatched: durationMatched,
-                  callDuration: callDuration,
-                  adjDuration: adjDuration
-                };
+              if (!sameDay(cand.dt, adjDt)) continue;
+              const dm = diffMinutes(cand.dt, adjDt);
+              if (dm <= WINDOW_MIN) {
+                if (!best || dm < best.diff) best = { diff: dm, call: cand };
               }
             }
-            
             if (best && best.call) {
               matchMap.set(`${best.call.callerId}|${best.call.dateOfCall}`, a);
-              
-              // Track match statistics
-              if (best.durationMatched) {
-                matchStats.withDuration++;
-              } else {
-                matchStats.withoutDuration++;
-              }
-              
-              // Log match details for debugging
-              if (best.durationMatched) {
-                console.log(`[MATCH] Caller: ${a.callerId.substring(0,10)}... | Time diff: ${best.diff.toFixed(1)} min | Duration: ${best.callDuration}s = ${best.adjDuration}s ✓`);
-              } else {
-                console.log(`[MATCH] Caller: ${a.callerId.substring(0,10)}... | Time diff: ${best.diff.toFixed(1)} min | Duration: ${best.callDuration || 'N/A'}s ≠ ${best.adjDuration}s (no duration match)`);
-              }
-            } else {
-              matchStats.noMatch++;
             }
           }
-          
-          // Log match statistics
-          console.log(`[INFO] Adjustment matching stats:`);
-          console.log(`  - Total adjustments: ${matchStats.total}`);
-          console.log(`  - Matched with duration: ${matchStats.withDuration}`);
-          console.log(`  - Matched without duration: ${matchStats.withoutDuration}`);
-          console.log(`  - No match found: ${matchStats.noMatch}`);
 
-          // STEP 3: Merge adjustments into matching calls
-          // IMPORTANT: When a match is found, the adjustment's "Time of Call" is treated
-          // as the correct/original timestamp. The call's dateOfCall is updated to match.
-          let timestampCorrections = 0;
-          
           callsMerged = processedCalls.map(c => {
             const a = matchMap.get(`${c.callerId}|${c.dateOfCall}`);
             if (a) {
-              // Check if timestamps are different (adjustment has the correct time)
-              const originalDateOfCall = c.dateOfCall;
-              const correctedDateOfCall = a.timeOfCall; // Adjustment's "Time of Call" is the real timestamp
-              const timestampChanged = originalDateOfCall !== correctedDateOfCall;
-              
-              if (timestampChanged) {
-                timestampCorrections++;
-                console.log(`[TIMESTAMP FIX] Caller: ${c.callerId.substring(0,10)}...`);
-                console.log(`  - Original (call table):    ${originalDateOfCall}`);
-                console.log(`  - Corrected (adjustment):   ${correctedDateOfCall}`);
-              }
-              
               return {
                 ...c,
-                // UPDATE: Use adjustment's timeOfCall as the correct dateOfCall
-                dateOfCall: correctedDateOfCall,
-                // Store original timestamp for reference (optional)
-                originalDateOfCall: timestampChanged ? originalDateOfCall : null,
                 category: c.category || category, // Ensure category is preserved
                 adjustmentTime: a.adjustmentTime,
                 adjustmentAmount: a.amount,
                 adjustmentClassification: a.classification,
-                adjustmentDuration: a.duration,
-                // Flag indicating timestamp was corrected from adjustment table
-                timestampCorrected: timestampChanged
+                adjustmentDuration: a.duration
               };
             }
             return {
@@ -273,10 +166,6 @@ export const scrapeElocalDataWithDateRange = (config) => (dateRange) => (service
               category: c.category || category // Ensure category is preserved
             };
           });
-          
-          if (timestampCorrections > 0) {
-            console.log(`[INFO] Timestamp corrections applied: ${timestampCorrections} calls updated with adjustment's "Time of Call"`);
-          }
         }
 
         if (callsMerged.length > 0) {
@@ -380,10 +269,11 @@ export const scrapeElocalDataWithDateRange = (config) => (dateRange) => (service
   })();
 };
 
-// Historical data service (past 10 days, excluding today) - STATIC category
+// Historical data service (past 15 days, excluding today) - STATIC category
+// Uses IST timezone-aware date range calculation
 export const scrapeHistoricalData = async (config) => {
-  const dateRange = getPast10DaysRange();
-  console.log(`[INFO] Historical Data Service (STATIC): ${getDateRangeDescription(dateRange)}`);
+  const dateRange = getPast15DaysRangeForHistorical();
+  console.log(`[INFO] Historical Data Service (STATIC): ${getDateRangeDescription(dateRange)} (15 days, IST-aware)`);
   return await scrapeElocalDataWithDateRange(config)(dateRange)('historical')('STATIC');
 };
 
@@ -397,10 +287,11 @@ export const scrapeCurrentDayData = async (config, dateRange = null) => {
   return await scrapeElocalDataWithDateRange(config)(finalDateRange)('current')('STATIC');
 };
 
-// Historical data service for API category (past 10 days, excluding today)
+// Historical data service for API category (past 15 days, excluding today)
+// Uses IST timezone-aware date range calculation
 export const scrapeHistoricalDataAPI = async (config) => {
-  const dateRange = getPast10DaysRange();
-  console.log(`[INFO] Historical Data Service (API): ${getDateRangeDescription(dateRange)}`);
+  const dateRange = getPast15DaysRangeForHistorical();
+  console.log(`[INFO] Historical Data Service (API): ${getDateRangeDescription(dateRange)} (15 days, IST-aware)`);
   return await scrapeElocalDataWithDateRange(config)(dateRange)('historical')('API');
 };
 
@@ -427,5 +318,6 @@ export const elocalServices = {
   scrapeCurrentDayDataAPI,
   getServiceInfo,
   getPast10DaysRange,
+  getPast15DaysRangeForHistorical,
   getCurrentDayRange
 };

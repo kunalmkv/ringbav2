@@ -23,7 +23,8 @@ import {
   scrapeCurrentDayDataAPI
 } from './elocal.scrapper.js';
 import { 
-  getPast10DaysRange, 
+  getPast10DaysRange,
+  getPast15DaysRangeForHistorical,
   getCurrentDayRange,
   getCurrentDayRangeWithTimezone, 
   getDateRangeDescription 
@@ -106,8 +107,8 @@ const executeJob = async (serviceName, serviceType, category, config) => {
     let dateRange;
     
     if (serviceType === 'historical') {
-      dateRange = getPast10DaysRange();
-      console.log(`[INFO] Date Range: ${getDateRangeDescription(dateRange)}`);
+      dateRange = getPast15DaysRangeForHistorical();
+      console.log(`[INFO] Date Range: ${getDateRangeDescription(dateRange)} (15 days historical, IST-aware)`);
       
       if (category === 'STATIC') {
         result = await scrapeHistoricalData(config);

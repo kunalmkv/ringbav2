@@ -8,8 +8,9 @@
  *   node run-ringba-cost-sync.js <date-range> [category]
  * 
  * Examples:
- *   node run-ringba-cost-sync.js past10days
- *   node run-ringba-cost-sync.js past10days API
+ *   node run-ringba-cost-sync.js past15days         # IST-aware 15 days (recommended)
+ *   node run-ringba-cost-sync.js past15days API
+ *   node run-ringba-cost-sync.js past10days         # Legacy 10 days
  *   node run-ringba-cost-sync.js past10days STATIC
  *   node run-ringba-cost-sync.js 18-11-2025
  *   node run-ringba-cost-sync.js 18-11-2025 to 19-11-2025
@@ -20,7 +21,7 @@ import dotenv from 'dotenv';
 import { fileURLToPath } from 'url';
 import { dirname, join } from 'path';
 import { syncCostToRingba } from './src/services/ringba-cost-sync.js';
-import { getPast10DaysRange, getCurrentDayRange, getDateRangeDescription } from './src/utils/date-utils.js';
+import { getPast10DaysRange, getPast15DaysRangeForCostSync, getCurrentDayRange, getDateRangeDescription } from './src/utils/date-utils.js';
 import { initFileLogger, setupConsoleLogging, closeLogger, getLogFile } from './src/utils/file-logger.js';
 
 const __filename = fileURLToPath(import.meta.url);
@@ -132,6 +133,12 @@ const parseDateRange = (args) => {
   const firstArg = args[0].toLowerCase();
 
   // Handle special keywords
+  // past15days - IST-aware 15 days (recommended for scheduled runs)
+  if (firstArg === 'past15days') {
+    return getPast15DaysRangeForCostSync();
+  }
+
+  // past10days - Legacy 10 days (server timezone)
   if (firstArg === 'past10days' || firstArg === 'historical') {
     return getPast10DaysRange();
   }

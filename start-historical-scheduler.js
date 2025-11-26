@@ -6,7 +6,8 @@
  * This script starts the scheduler that runs the historical eLocal scraping service
  * for both API and STATIC categories every day at 11:58 PM IST.
  * 
- * The historical service scrapes data for the past 10 days (excluding today).
+ * The historical service scrapes data for the past 15 days (excluding today).
+ * Uses IST timezone-aware date calculation regardless of server location.
  * 
  * Usage:
  *   node start-historical-scheduler.js
@@ -16,7 +17,15 @@
  * 1. Run Historical STATIC service at 11:58 PM IST daily
  * 2. Run Historical API service at 11:58 PM IST daily
  * 
- * Both services will scrape data for the past 10 days.
+ * Both services will scrape data for the past 15 days.
+ * 
+ * Date Range Logic (IST-aware):
+ * - Before 12:00 PM IST: considers "today" as previous IST day
+ * - After 12:00 PM IST: considers "today" as current IST day
+ * - End date is always "yesterday" relative to calculated "today"
+ * 
+ * Example at 11:58 PM IST on Nov 26:
+ * - "Today" = Nov 26, End date = Nov 25, Date Range: Nov 11 to Nov 25
  * 
  * To stop the scheduler, press Ctrl+C
  */
@@ -115,7 +124,7 @@ const main = async () => {
   console.log('This scheduler runs the historical eLocal scraping service');
   console.log('for both API and STATIC categories every day at 11:58 PM IST.');
   console.log('');
-  console.log('The historical service scrapes data for the past 10 days.');
+  console.log('The historical service scrapes data for the past 15 days (IST-aware).');
   console.log('='.repeat(70));
   
   // Load and verify configuration

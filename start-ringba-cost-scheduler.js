@@ -11,7 +11,16 @@
  * - 6:08 AM IST (06:08)
  * 
  * The service syncs cost changes from eLocal database to Ringba dashboard
- * for the past 10 days.
+ * for the past 15 days (IST timezone-aware).
+ * 
+ * Date Range Logic:
+ * - Uses IST timezone for date calculation (independent of server location)
+ * - Before 12:00 PM IST: ends at PREVIOUS day (CST data not complete yet)
+ * - After 12:00 PM IST: ends at CURRENT day (CST data available)
+ * 
+ * Examples:
+ * - At 12:08 AM IST on Nov 26: Date Range = Nov 11 to Nov 25 (NOT Nov 26)
+ * - At 9:08 PM IST on Nov 26: Date Range = Nov 12 to Nov 26 (includes Nov 26)
  * 
  * Usage:
  *   node start-ringba-cost-scheduler.js
@@ -25,7 +34,7 @@ import { fileURLToPath } from 'url';
 import { dirname, join } from 'path';
 import dotenv from 'dotenv';
 import { syncCostToRingba } from './src/services/ringba-cost-sync.js';
-import { getPast10DaysRange, getDateRangeDescription } from './src/utils/date-utils.js';
+import { getPast15DaysRangeForCostSync, getDateRangeDescription } from './src/utils/date-utils.js';
 import {
   initFileLogger,
   setupConsoleLogging,
@@ -79,8 +88,8 @@ const executeCostSync = async (config, scheduleName) => {
   console.log('='.repeat(70));
   
   try {
-    // Get date range (past 10 days)
-    const dateRangeObj = getPast10DaysRange();
+    // Get date range (past 15 days, IST timezone-aware, includes current day based on IST time)
+    const dateRangeObj = getPast15DaysRangeForCostSync();
     // Convert to format expected by syncCostToRingba (Date objects)
     const dateRange = {
       startDate: dateRangeObj.startDate, // Date object

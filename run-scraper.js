@@ -28,7 +28,7 @@ import dotenv from 'dotenv';
 import { fileURLToPath } from 'url';
 import { dirname, join } from 'path';
 import { scrapeElocalDataWithDateRange } from './src/services/elocal.scrapper.js';
-import { getDateRangeDescription, getPast10DaysRange } from './src/utils/date-utils.js';
+import { getDateRangeDescription, getPast10DaysRange, getPast15DaysRangeForHistorical } from './src/utils/date-utils.js';
 
 const __filename = fileURLToPath(import.meta.url);
 const __dirname = dirname(__filename);
