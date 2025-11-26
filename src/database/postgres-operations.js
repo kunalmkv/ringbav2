@@ -93,6 +93,8 @@ export const dbOps = (config) => {
     },
 
     // Insert or update campaign calls in batch
+    // Handles timestamp corrections: when originalDateOfCall is set, the record is looked up
+    // by the original timestamp and updated with the corrected dateOfCall from adjustment table
     async insertCallsBatch(calls) {
       if (!calls || calls.length === 0) {
         return { inserted: 0, updated: 0 };
@@ -101,6 +103,8 @@ export const dbOps = (config) => {
       try {
         let inserted = 0;
         let updated = 0;
+        let timestampCorrected = 0;
+        let skippedDuplicates = 0;
 
         // Use a transaction for batch operations
         const client = await pool.connect();
@@ -111,6 +115,45 @@ export const dbOps = (config) => {
             // Check if call already exists (based on callerId, date_of_call, and category)
             // date_of_call now stores full ISO timestamp (YYYY-MM-DDTHH:mm:ss)
             // Match on exact timestamp to allow multiple calls per day
+            //
+            // TIMESTAMP CORRECTION HANDLING:
+            // If originalDateOfCall is set (from adjustment merge), we need to:
+            // 1. Look up the record by the ORIGINAL timestamp
+            // 2. Update it with the CORRECTED timestamp (from adjustment's "Time of Call")
+            // 3. BUT if the corrected timestamp already exists, skip the timestamp correction
+            
+            const lookupTimestamp = call.originalDateOfCall || call.dateOfCall;
+            let correctedTimestamp = call.dateOfCall;
+            let isTimestampCorrection = call.originalDateOfCall && call.originalDateOfCall !== call.dateOfCall;
+            
+            // If this is a timestamp correction, check if the corrected timestamp would cause a duplicate
+            if (isTimestampCorrection) {
+              const duplicateCheckQuery = `
+                SELECT id FROM elocal_call_data
+                WHERE caller_id = $1 
+                  AND date_of_call = $2
+                  AND category = $3
+                LIMIT 1;
+              `;
+              const duplicateCheckResult = await client.query(duplicateCheckQuery, [
+                call.callerId,
+                correctedTimestamp,
+                call.category || 'STATIC'
+              ]);
+              
+              if (duplicateCheckResult.rows.length > 0) {
+                // A record with the corrected timestamp already exists!
+                // Skip the timestamp correction - keep the original timestamp
+                console.log(`[DB SKIP] Timestamp correction would cause duplicate for caller ${call.callerId.substring(0,10)}...`);
+                console.log(`         - Original: ${call.originalDateOfCall}`);
+                console.log(`         - Corrected (skipped): ${correctedTimestamp}`);
+                console.log(`         - Reason: Record with corrected timestamp already exists`);
+                correctedTimestamp = lookupTimestamp; // Revert to original timestamp
+                isTimestampCorrection = false;
+                skippedDuplicates++;
+              }
+            }
+            
             const checkQuery = `
               SELECT id FROM elocal_call_data
               WHERE caller_id = $1 
@@ -120,38 +163,41 @@ export const dbOps = (config) => {
             `;
             const checkResult = await client.query(checkQuery, [
               call.callerId,
-              call.dateOfCall || '',
+              lookupTimestamp || '',
               call.category || 'STATIC'
             ]);
 
             if (checkResult.rows.length > 0) {
               // Update existing call
+              // NOTE: If this is a timestamp correction, we update date_of_call to the corrected value
               const updateQuery = `
                 UPDATE elocal_call_data
                 SET
-                  campaign_phone = $1,
-                  payout = $2,
-                  category = $3,
-                  city_state = $4,
-                  zip_code = $5,
-                  screen_duration = $6,
-                  post_screen_duration = $7,
-                  total_duration = $8,
-                  assessment = $9,
-                  classification = $10,
-                  adjustment_time = $11,
-                  adjustment_amount = $12,
-                  adjustment_classification = $13,
-                  adjustment_duration = $14,
-                  unmatched = $15,
-                  ringba_inbound_call_id = $16,
+                  date_of_call = $1,
+                  campaign_phone = $2,
+                  payout = $3,
+                  category = $4,
+                  city_state = $5,
+                  zip_code = $6,
+                  screen_duration = $7,
+                  post_screen_duration = $8,
+                  total_duration = $9,
+                  assessment = $10,
+                  classification = $11,
+                  adjustment_time = $12,
+                  adjustment_amount = $13,
+                  adjustment_classification = $14,
+                  adjustment_duration = $15,
+                  unmatched = $16,
+                  ringba_inbound_call_id = $17,
                   updated_at = NOW()
-                WHERE caller_id = $17 
-                  AND date_of_call = $18
-                  AND category = $19
+                WHERE caller_id = $18 
+                  AND date_of_call = $19
+                  AND category = $20
                 RETURNING id;
               `;
               await client.query(updateQuery, [
+                correctedTimestamp, // Use corrected timestamp (may be same or different)
                 call.campaignPhone || '(877) 834-1273',
                 call.payout || 0,
                 call.category || 'STATIC',
@@ -169,49 +215,123 @@ export const dbOps = (config) => {
                 call.unmatched || false,
                 call.ringbaInboundCallId || null,
                 call.callerId,
-                call.dateOfCall || '',
+                lookupTimestamp || '', // Use original timestamp for WHERE clause
                 call.category || 'STATIC'
               ]);
               updated++;
+              
+              if (isTimestampCorrection) {
+                timestampCorrected++;
+              }
             } else {
-              // Insert new call
-              const insertQuery = `
-                INSERT INTO elocal_call_data (
-                  caller_id, date_of_call, campaign_phone, payout, category,
-                  city_state, zip_code, screen_duration, post_screen_duration,
-                  total_duration, assessment, classification,
-                  adjustment_time, adjustment_amount, adjustment_classification,
-                  adjustment_duration, unmatched, ringba_inbound_call_id, created_at
-                )
-                VALUES ($1, $2, $3, $4, $5, $6, $7, $8, $9, $10, $11, $12, $13, $14, $15, $16, $17, $18, NOW())
-                RETURNING id;
+              // Insert new call - but first check if the timestamp already exists (for non-correction cases)
+              const existsCheckQuery = `
+                SELECT id FROM elocal_call_data
+                WHERE caller_id = $1 
+                  AND date_of_call = $2
+                  AND category = $3
+                LIMIT 1;
               `;
-              await client.query(insertQuery, [
+              const existsCheckResult = await client.query(existsCheckQuery, [
                 call.callerId,
-                call.dateOfCall,
-                call.campaignPhone || '(877) 834-1273',
-                call.payout || 0,
-                call.category || 'STATIC',
-                call.cityState || null,
-                call.zipCode || null,
-                call.screenDuration || null,
-                call.postScreenDuration || null,
-                call.totalDuration || null,
-                call.assessment || null,
-                call.classification || null,
-                call.adjustmentTime || null,
-                call.adjustmentAmount || null,
-                call.adjustmentClassification || null,
-                call.adjustmentDuration || null,
-                call.unmatched || false,
-                call.ringbaInboundCallId || null
+                correctedTimestamp,
+                call.category || 'STATIC'
               ]);
-              inserted++;
+              
+              if (existsCheckResult.rows.length > 0) {
+                // Record with this timestamp already exists, update it instead
+                const updateQuery = `
+                  UPDATE elocal_call_data
+                  SET
+                    campaign_phone = $1,
+                    payout = $2,
+                    city_state = $3,
+                    zip_code = $4,
+                    screen_duration = $5,
+                    post_screen_duration = $6,
+                    total_duration = $7,
+                    assessment = $8,
+                    classification = $9,
+                    adjustment_time = $10,
+                    adjustment_amount = $11,
+                    adjustment_classification = $12,
+                    adjustment_duration = $13,
+                    unmatched = $14,
+                    ringba_inbound_call_id = $15,
+                    updated_at = NOW()
+                  WHERE caller_id = $16 
+                    AND date_of_call = $17
+                    AND category = $18
+                  RETURNING id;
+                `;
+                await client.query(updateQuery, [
+                  call.campaignPhone || '(877) 834-1273',
+                  call.payout || 0,
+                  call.cityState || null,
+                  call.zipCode || null,
+                  call.screenDuration || null,
+                  call.postScreenDuration || null,
+                  call.totalDuration || null,
+                  call.assessment || null,
+                  call.classification || null,
+                  call.adjustmentTime || null,
+                  call.adjustmentAmount || null,
+                  call.adjustmentClassification || null,
+                  call.adjustmentDuration || null,
+                  call.unmatched || false,
+                  call.ringbaInboundCallId || null,
+                  call.callerId,
+                  correctedTimestamp,
+                  call.category || 'STATIC'
+                ]);
+                updated++;
+              } else {
+                // Insert new call
+                const insertQuery = `
+                  INSERT INTO elocal_call_data (
+                    caller_id, date_of_call, campaign_phone, payout, category,
+                    city_state, zip_code, screen_duration, post_screen_duration,
+                    total_duration, assessment, classification,
+                    adjustment_time, adjustment_amount, adjustment_classification,
+                    adjustment_duration, unmatched, ringba_inbound_call_id, created_at
+                  )
+                  VALUES ($1, $2, $3, $4, $5, $6, $7, $8, $9, $10, $11, $12, $13, $14, $15, $16, $17, $18, NOW())
+                  RETURNING id;
+                `;
+                await client.query(insertQuery, [
+                  call.callerId,
+                  correctedTimestamp, // Use corrected timestamp
+                  call.campaignPhone || '(877) 834-1273',
+                  call.payout || 0,
+                  call.category || 'STATIC',
+                  call.cityState || null,
+                  call.zipCode || null,
+                  call.screenDuration || null,
+                  call.postScreenDuration || null,
+                  call.totalDuration || null,
+                  call.assessment || null,
+                  call.classification || null,
+                  call.adjustmentTime || null,
+                  call.adjustmentAmount || null,
+                  call.adjustmentClassification || null,
+                  call.adjustmentDuration || null,
+                  call.unmatched || false,
+                  call.ringbaInboundCallId || null
+                ]);
+                inserted++;
+              }
             }
+          }
+          
+          if (timestampCorrected > 0) {
+            console.log(`[DB] Timestamp corrections applied to ${timestampCorrected} existing records`);
+          }
+          if (skippedDuplicates > 0) {
+            console.log(`[DB] Skipped ${skippedDuplicates} timestamp corrections (would cause duplicates)`);
           }
 
           await client.query('COMMIT');
-          return { inserted, updated };
+          return { inserted, updated, skippedDuplicates };
         } catch (error) {
           await client.query('ROLLBACK');
           throw error;

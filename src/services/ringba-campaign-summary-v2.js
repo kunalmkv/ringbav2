@@ -1,6 +1,6 @@
-// Service to fetch and save Ringba campaign summary data using Insights API (v2)
-// Uses the /insights endpoint to fetch aggregated metrics like totalCost
-// Tracks RPC (Revenue Per Call) and total calls per day per campaign
+// Service to fetch and save Ringba campaign summary data using hybrid API approach (v2)
+// Uses /insights API for totalCost and /calllogs API for call details (connected calls, etc.)
+// Tracks RPC (Revenue Per Call), total calls, connected calls per day per campaign
 
 import { dbOps } from '../database/postgres-operations.js';
 import { TARGET_IDS } from '../http/ringba-target-calls.js';
@@ -9,9 +9,10 @@ import fetch from 'node-fetch';
 const RINGBA_BASE_URL = 'https://api.ringba.com/v2';
 
 /**
- * Fetch insights data by campaign ID from Ringba Insights API
+ * Fetch totalCost from Ringba Insights API
+ * This is the only metric reliably available from the insights endpoint
  */
-const getInsightsByCampaignId = async (accountId, apiToken, campaignId, startDate, endDate) => {
+const getTotalCostFromInsights = async (accountId, apiToken, filterColumn, filterValue, startDate, endDate) => {
   const url = `${RINGBA_BASE_URL}/${accountId}/insights`;
   const headers = {
     'Authorization': `Token ${apiToken}`,
@@ -22,28 +23,15 @@ const getInsightsByCampaignId = async (accountId, apiToken, campaignId, startDat
     reportStart: startDate.toISOString(),
     reportEnd: endDate.toISOString(),
     valueColumns: [
-      { column: 'totalCost' },
-      { column: 'totalCalls' },           // Total incoming calls
-      { column: 'completedCalls' },      // Completed calls
-      { column: 'connectedCalls' },      // Connected calls
-      { column: 'totalRevenue' },         // Total revenue
-      { column: 'totalPayout' },         // Total payout
-      { column: 'conversionCount' },     // Number of conversions
-      { column: 'averageCallDuration' }, // Average call duration
-      { column: 'averageTalkTime' },     // Average talk time
-      { column: 'connectionRate' },      // Connection rate
-      { column: 'revenuePerCall' },      // Revenue per call (RPC)
-      { column: 'costPerCall' },         // Cost per call
-      { column: 'profit' },              // Profit
-      { column: 'margin' }               // Margin percentage
+      { column: 'totalCost' }
     ],
     filters: [
       {
         anyConditionToMatch: [
           {
-            column: 'campaignId',
+            column: filterColumn,
             comparisonType: 'EQUALS',
-            value: campaignId,
+            value: filterValue,
             isNegativeMatch: false
           }
         ]
@@ -51,186 +39,216 @@ const getInsightsByCampaignId = async (accountId, apiToken, campaignId, startDat
     ]
   };
   
-  // Try with all columns first, fall back to basic columns if needed
-  let response = await fetch(url, {
+  const response = await fetch(url, {
     method: 'POST',
     headers,
     body: JSON.stringify(body)
   });
   
-  // If we get a 422 error (unknown column), try with just basic columns
   if (!response.ok) {
     const errorText = await response.text().catch(() => 'Unable to read error response');
-    let errorJson = null;
-    try {
-      errorJson = JSON.parse(errorText);
-    } catch (e) {
-      // Not JSON, use as-is
-    }
-    
-    // If it's a column error, try with just totalCost (the only column we know works)
-    if (response.status === 422 && (errorJson?.message?.includes('Unknown value column') || errorText.includes('Unknown value column'))) {
-      console.log(`[Campaign Summary V2] Column error detected, retrying with totalCost only...`);
-      body.valueColumns = [
-        { column: 'totalCost' }
-      ];
-      
-      response = await fetch(url, {
-        method: 'POST',
-        headers,
-        body: JSON.stringify(body)
-      });
-    }
-    
-    if (!response.ok) {
-      const finalErrorText = await response.text().catch(() => 'Unable to read error response');
-      throw new Error(`Ringba Insights API error ${response.status}: ${finalErrorText}`);
-    }
+    console.warn(`[Campaign Summary V2] Insights API error: ${errorText}`);
+    return 0;
   }
   
   const data = await response.json();
   
-  // The insights API might return data in different formats
-  // Try to extract the aggregated values
-  let insights = null;
-  
+  // Extract totalCost from response
+  let totalCost = 0;
   if (data.report) {
-    // If there's a report object, check for records or aggregated data
     if (data.report.records && data.report.records.length > 0) {
-      insights = data.report.records[0];
+      totalCost = Number(data.report.records[0].totalCost || 0);
     } else if (data.report.aggregated) {
-      insights = data.report.aggregated;
+      totalCost = Number(data.report.aggregated.totalCost || 0);
     } else if (data.report.summary) {
-      insights = data.report.summary;
+      totalCost = Number(data.report.summary.totalCost || 0);
     }
-  } else if (data.data) {
-    insights = data.data;
-  } else if (data.insights) {
-    insights = data.insights;
-  } else if (Array.isArray(data) && data.length > 0) {
-    insights = data[0];
-  } else {
-    // Try to use the root object if it has the expected fields
-    if (data.totalCost !== undefined || data.totalCalls !== undefined) {
-      insights = data;
-    }
+  } else if (data.totalCost !== undefined) {
+    totalCost = Number(data.totalCost);
   }
   
-  return insights;
+  return totalCost;
 };
 
 /**
- * Fetch insights data by target ID from Ringba Insights API
+ * Fetch call logs from Ringba /calllogs API
+ * Uses hasConnected filter to get connected/not connected calls
+ * 
+ * @param {string} accountId - Ringba account ID
+ * @param {string} apiToken - Ringba API token
+ * @param {string} filterColumn - Column to filter by (targetId, campaignId)
+ * @param {string} filterValue - Value to filter
+ * @param {Date} startDate - Start date
+ * @param {Date} endDate - End date
+ * @param {string|null} hasConnected - Filter: "yes" for connected, "no" for not connected, null for all
+ * @returns {Promise<{calls: Array, totalCount: number}>}
  */
-const getInsightsByTargetId = async (accountId, apiToken, targetId, startDate, endDate) => {
-  const url = `${RINGBA_BASE_URL}/${accountId}/insights`;
+const getCallLogs = async (accountId, apiToken, filterColumn, filterValue, startDate, endDate, hasConnected = null) => {
+  const url = `${RINGBA_BASE_URL}/${accountId}/calllogs`;
   const headers = {
     'Authorization': `Token ${apiToken}`,
     'Content-Type': 'application/json'
   };
   
+  // Build filters array
+  const filters = [
+    {
+      anyConditionToMatch: [
+        {
+          column: filterColumn,
+          comparisonType: 'EQUALS',
+          value: filterValue,
+          isNegativeMatch: false
+        }
+      ]
+    }
+  ];
+  
+  // Add hasConnected filter if specified
+  if (hasConnected !== null) {
+    filters.push({
+      anyConditionToMatch: [
+        {
+          column: 'hasConnected',
+          comparisonType: 'EQUALS',
+          value: hasConnected,
+          isNegativeMatch: false
+        }
+      ]
+    });
+  }
+  
   const body = {
     reportStart: startDate.toISOString(),
     reportEnd: endDate.toISOString(),
-    valueColumns: [
-      { column: 'totalCost' },
-      { column: 'totalCalls' },           // Total incoming calls
-      { column: 'completedCalls' },       // Completed calls
-      { column: 'connectedCalls' },      // Connected calls
-      { column: 'totalRevenue' },         // Total revenue
-      { column: 'totalPayout' },         // Total payout
-      { column: 'conversionCount' },      // Number of conversions
-      { column: 'averageCallDuration' },  // Average call duration
-      { column: 'averageTalkTime' },      // Average talk time
-      { column: 'connectionRate' },      // Connection rate
-      { column: 'revenuePerCall' },       // Revenue per call (RPC)
-      { column: 'costPerCall' },          // Cost per call
-      { column: 'profit' },               // Profit
-      { column: 'margin' }                // Margin percentage
+    offset: 0,
+    size: 1000,
+    orderByColumns: [
+      { column: 'callDt', direction: 'desc' }
     ],
-    filters: [
-      {
-        anyConditionToMatch: [
-          {
-            column: 'targetId',
-            comparisonType: 'EQUALS',
-            value: targetId,
-            isNegativeMatch: false
-          }
-        ]
-      }
-    ]
+    valueColumns: [
+      // Core call identification
+      { column: 'inboundCallId' },
+      { column: 'callDt' },
+      { column: 'targetName' },
+      { column: 'targetId' },
+      // Financial data
+      { column: 'conversionAmount' },  // Revenue
+      { column: 'payoutAmount' },      // Payout
+      // Call routing
+      { column: 'inboundPhoneNumber' },
+      { column: 'tag:InboundNumber:Number' }, // Caller ID
+      // Campaign info
+      { column: 'campaignName' },
+      { column: 'publisherName' }
+    ],
+    filters: filters,
+    formatDateTime: true
   };
   
-  // Try with all columns first, fall back to basic columns if needed
-  let response = await fetch(url, {
-    method: 'POST',
-    headers,
-    body: JSON.stringify(body)
-  });
+  const allCalls = [];
+  let offset = 0;
+  let hasMore = true;
+  let totalCount = 0;
   
-  // If we get a 422 error (unknown column), try with just basic columns
-  if (!response.ok) {
-    const errorText = await response.text().catch(() => 'Unable to read error response');
-    let errorJson = null;
-    try {
-      errorJson = JSON.parse(errorText);
-    } catch (e) {
-      // Not JSON, use as-is
+  while (hasMore) {
+    body.offset = offset;
+    
+    const response = await fetch(url, {
+      method: 'POST',
+      headers,
+      body: JSON.stringify(body)
+    });
+    
+    if (!response.ok) {
+      const errorText = await response.text().catch(() => 'Unable to read error response');
+      throw new Error(`Ringba CallLogs API error ${response.status}: ${errorText}`);
     }
     
-    // If it's a column error, try with just totalCost (the only column we know works)
-    if (response.status === 422 && (errorJson?.message?.includes('Unknown value column') || errorText.includes('Unknown value column'))) {
-      console.log(`[Campaign Summary V2] Column error detected, retrying with totalCost only...`);
-      body.valueColumns = [
-        { column: 'totalCost' }
-      ];
-      
-      response = await fetch(url, {
-        method: 'POST',
-        headers,
-        body: JSON.stringify(body)
+    const data = await response.json();
+    const records = data.report?.records || [];
+    totalCount = data.report?.totalCount || data.report?.total || records.length;
+    
+    // Process records
+    for (const record of records) {
+      allCalls.push({
+        inboundCallId: record.inboundCallId || null,
+        callDate: record.callDt || null,
+        targetId: record.targetId || filterValue,
+        targetName: record.targetName || null,
+        revenue: Number(record.conversionAmount || 0),
+        payout: Number(record.payoutAmount || 0),
+        inboundPhoneNumber: record.inboundPhoneNumber || null,
+        callerId: record['tag:InboundNumber:Number'] || null,
+        campaignName: record.campaignName || null,
+        publisherName: record.publisherName || null
       });
     }
     
-    if (!response.ok) {
-      const finalErrorText = await response.text().catch(() => 'Unable to read error response');
-      throw new Error(`Ringba Insights API error ${response.status}: ${finalErrorText}`);
+    // Check if there are more records
+    if (records.length < 1000 || allCalls.length >= totalCount) {
+      hasMore = false;
+    } else {
+      offset += 1000;
+      // Small delay to avoid rate limiting
+      await new Promise(resolve => setTimeout(resolve, 100));
     }
   }
   
-  const data = await response.json();
-  
-  // The insights API might return data in different formats
-  // Try to extract the aggregated values
-  let insights = null;
-  
-  if (data.report) {
-    if (data.report.records && data.report.records.length > 0) {
-      insights = data.report.records[0];
-    } else if (data.report.aggregated) {
-      insights = data.report.aggregated;
-    } else if (data.report.summary) {
-      insights = data.report.summary;
-    }
-  } else if (data.data) {
-    insights = data.data;
-  } else if (data.insights) {
-    insights = data.insights;
-  } else if (Array.isArray(data) && data.length > 0) {
-    insights = data[0];
-  } else {
-    if (data.totalCost !== undefined || data.totalCalls !== undefined) {
-      insights = data;
-    }
-  }
-  
-  return insights;
+  return { calls: allCalls, totalCount: Math.max(totalCount, allCalls.length) };
 };
 
 /**
- * Fetch campaign summary for a specific date from Ringba Insights API
- * Aggregates insights data to calculate RPC, total calls, revenue, payout, etc.
+ * Fetch call statistics using /calllogs API with hasConnected filter
+ * Gets total calls, connected calls, and financial data
+ */
+const getCallStats = async (accountId, apiToken, filterColumn, filterValue, startDate, endDate) => {
+  console.log(`[Campaign Summary V2] Fetching call stats from /calllogs API...`);
+  
+  // Fetch ALL calls (no hasConnected filter)
+  console.log(`[Campaign Summary V2] Fetching all calls...`);
+  const allCallsResult = await getCallLogs(accountId, apiToken, filterColumn, filterValue, startDate, endDate, null);
+  const allCalls = allCallsResult.calls;
+  const totalCalls = allCallsResult.totalCount;
+  
+  console.log(`[Campaign Summary V2] Total calls fetched: ${totalCalls}`);
+  
+  // Fetch CONNECTED calls only (hasConnected = "yes")
+  console.log(`[Campaign Summary V2] Fetching connected calls (hasConnected=yes)...`);
+  const connectedResult = await getCallLogs(accountId, apiToken, filterColumn, filterValue, startDate, endDate, 'yes');
+  const connectedCalls = connectedResult.totalCount;
+  
+  console.log(`[Campaign Summary V2] Connected calls: ${connectedCalls}`);
+  
+  // Calculate financial totals from all calls
+  let totalRevenue = 0;
+  let totalPayout = 0;
+  
+  for (const call of allCalls) {
+    totalRevenue += call.revenue;
+    totalPayout += call.payout;
+  }
+  
+  // Get campaign/target name from first call if available
+  const campaignName = allCalls.length > 0 ? allCalls[0].campaignName : null;
+  const targetName = allCalls.length > 0 ? allCalls[0].targetName : null;
+  
+  return {
+    totalCalls,
+    connectedCalls,
+    noConnections: totalCalls - connectedCalls,
+    totalRevenue,
+    totalPayout,
+    campaignName,
+    targetName,
+    calls: allCalls
+  };
+};
+
+/**
+ * Fetch campaign summary for a specific date using hybrid API approach
+ * - Uses /insights API for totalCost (telco cost)
+ * - Uses /calllogs API with hasConnected filter for call details
  * Can fetch by campaignId or targetId
  */
 const fetchCampaignSummary = async (accountId, apiToken, identifier, identifierName, date, useCampaignId = false) => {
@@ -258,192 +276,94 @@ const fetchCampaignSummary = async (accountId, apiToken, identifier, identifierN
     const endDate = new Date(Date.UTC(year, month, day, 23, 59, 59, 999));
     
     const dateStr = typeof date === 'string' ? date : date.toISOString().split('T')[0];
-    console.log(`[Campaign Summary V2] Fetching insights for ${identifierName} on ${dateStr}`);
+    const filterColumn = useCampaignId ? 'campaignId' : 'targetId';
+    
+    console.log(`[Campaign Summary V2] Fetching data for ${identifierName} on ${dateStr}`);
     console.log(`[Campaign Summary V2] Date range: ${startDate.toISOString()} to ${endDate.toISOString()}`);
+    console.log(`[Campaign Summary V2] Filter: ${filterColumn} = ${identifier}`);
     
-    let insights = null;
+    // Step 1: Get totalCost from /insights API
+    console.log(`[Campaign Summary V2] Step 1: Fetching totalCost from /insights API...`);
+    const totalCost = await getTotalCostFromInsights(accountId, apiToken, filterColumn, identifier, startDate, endDate);
+    console.log(`[Campaign Summary V2] Total Cost from Insights: $${totalCost.toFixed(2)}`);
     
-    if (useCampaignId) {
-      // Fetch by campaign ID
-      console.log(`[Campaign Summary V2] Fetching by Campaign ID: ${identifier}`);
-      insights = await getInsightsByCampaignId(accountId, apiToken, identifier, startDate, endDate);
-    } else {
-      // Fetch by target ID
-      console.log(`[Campaign Summary V2] Fetching by Target ID: ${identifier}`);
-      insights = await getInsightsByTargetId(accountId, apiToken, identifier, startDate, endDate);
-    }
+    // Step 2: Get call stats from /calllogs API (uses hasConnected filter)
+    console.log(`[Campaign Summary V2] Step 2: Fetching call stats from /calllogs API...`);
+    const callStats = await getCallStats(accountId, apiToken, filterColumn, identifier, startDate, endDate);
     
-    if (!insights) {
-      console.log(`[Campaign Summary V2] No insights data returned for ${identifierName}`);
-      // Return empty summary
-      return {
-        campaignName: identifierName || 'Unknown Campaign',
-        targetId: useCampaignId ? null : identifier,
-        targetName: identifierName,
-        campaignId: useCampaignId ? identifier : null,
-        summaryDate: dateStr,
-        totalCalls: 0,
-        revenue: 0,
-        payout: 0,
-        rpc: 0,
-        totalCallLengthSeconds: 0,
-        averageCallLengthSeconds: 0,
-        totalCost: 0,
-        noConnections: 0,
-        duplicates: 0,
-        blocked: 0,
-        ivrHandled: 0,
-        profit: 0,
-        margin: 0,
-        conversionRate: 0,
-        connectedCalls: 0,
-        connectionRate: 0,
-        totalTalkTime: 0,
-        averageTalkTime: 0,
-        totalWaitTime: 0,
-        averageWaitTime: 0,
-        totalHoldTime: 0,
-        averageHoldTime: 0,
-        totalTimeToAnswer: 0,
-        averageTimeToAnswer: 0,
-        totalPostCallDuration: 0,
-        averagePostCallDuration: 0,
-        callsWithRecordings: 0,
-        totalRecordingDuration: 0,
-        averageRecordingDuration: 0,
-        totalTransfers: 0,
-        averageTransfers: 0,
-        totalConferences: 0,
-        averageConferences: 0,
-        reroutedCalls: 0,
-        rootCalls: 0,
-        averageQualityScore: null,
-        topStates: null,
-        topCities: null,
-        deviceTypeDistribution: null,
-        sourceDistribution: null,
-        mediumDistribution: null
-      };
-    }
+    const { totalCalls, connectedCalls, noConnections, totalRevenue, totalPayout } = callStats;
     
-    console.log(`[Campaign Summary V2] Retrieved insights data for ${identifierName}`);
-    console.log(`[Campaign Summary V2] Raw insights:`, JSON.stringify(insights, null, 2));
-    
-    // Note: Insights API appears to only support totalCost column
-    // For call details (incoming calls, completed calls, etc.), we would need to use the calllogs API
-    // For now, we'll fetch totalCost from Insights and use calllogs API for call details
-    
-    // Extract values from insights data
-    // Handle different possible field names
-    const totalCalls = Number(insights.totalCalls || insights.calls || insights.callCount || insights.incomingCalls || 0);
-    const completedCalls = Number(insights.completedCalls || insights.completed || 0);
-    const connectedCallsFromAPI = Number(insights.connectedCalls || insights.connected || 0);
-    const totalRevenue = Number(insights.totalRevenue || insights.revenue || insights.conversionAmount || 0);
-    const totalPayout = Number(insights.totalPayout || insights.payout || insights.payoutAmount || 0);
-    const totalCost = Number(insights.totalCost || insights.cost || 0);
-    const conversionCount = Number(insights.conversionCount || insights.conversions || 0);
-    const averageCallDuration = Number(insights.averageCallDuration || insights.avgCallDuration || 0);
-    const averageTalkTime = Number(insights.averageTalkTime || insights.avgTalkTime || 0);
-    const connectionRateFromAPI = Number(insights.connectionRate || 0);
-    const revenuePerCall = Number(insights.revenuePerCall || insights.rpc || 0);
-    const costPerCall = Number(insights.costPerCall || 0);
-    const profit = Number(insights.profit || (totalRevenue - totalPayout));
-    const margin = Number(insights.margin || (totalRevenue > 0 ? (profit / totalRevenue) * 100 : 0));
+    // Get campaign/target name from call data if available
+    const campaignName = callStats.campaignName || identifierName || 'Unknown Campaign';
+    const targetName = callStats.targetName || identifierName;
     
     // Calculate derived metrics
-    const rpc = revenuePerCall > 0 ? revenuePerCall : (totalCalls > 0 ? totalRevenue / totalCalls : 0);
-    const totalCallLengthSeconds = averageCallDuration * totalCalls;
-    const conversionRate = totalCalls > 0 ? (conversionCount / totalCalls) * 100 : 0;
-    
-    // Use connectedCalls from API if available, otherwise calculate from connectionRate
-    let connectedCalls = connectedCallsFromAPI;
-    if (connectedCalls === 0 && connectionRateFromAPI > 0 && totalCalls > 0) {
-      connectedCalls = Math.round((connectionRateFromAPI / 100) * totalCalls);
-    } else if (connectedCalls === 0 && completedCalls > 0) {
-      // If we have completedCalls but no connectedCalls, use completedCalls as connected
-      connectedCalls = completedCalls;
-    }
-    
-    // Calculate connection rate if not provided
-    const connectionRate = connectionRateFromAPI > 0 
-      ? connectionRateFromAPI 
-      : (totalCalls > 0 ? (connectedCalls / totalCalls) * 100 : 0);
-    
-    const totalTalkTime = averageTalkTime * connectedCalls;
-    
-    // Calculate no connections (incoming calls that didn't connect)
-    const noConnections = totalCalls - connectedCalls;
-    
-    // Get campaign name from insights if available
-    const campaignName = insights.campaignName || identifierName || 'Unknown Campaign';
-    const targetName = insights.targetName || identifierName;
+    const rpc = totalCalls > 0 ? totalRevenue / totalCalls : 0;
+    const connectionRate = totalCalls > 0 ? (connectedCalls / totalCalls) * 100 : 0;
+    const profit = totalRevenue - totalPayout;
+    const margin = totalRevenue > 0 ? (profit / totalRevenue) * 100 : 0;
     
     const summary = {
       campaignName: campaignName,
-      targetId: useCampaignId ? (insights.targetId || null) : identifier,
+      targetId: useCampaignId ? null : identifier,
       targetName: targetName,
-      campaignId: useCampaignId ? identifier : (insights.campaignId || null),
+      campaignId: useCampaignId ? identifier : null,
       summaryDate: dateStr,
-      totalCalls: totalCalls,                    // Total incoming calls
+      totalCalls: totalCalls,                    // Total incoming calls (from /calllogs)
       revenue: parseFloat(totalRevenue.toFixed(2)),
       payout: parseFloat(totalPayout.toFixed(2)),
       rpc: parseFloat(rpc.toFixed(2)),
-      totalCallLengthSeconds: parseFloat(totalCallLengthSeconds.toFixed(2)),
-      averageCallLengthSeconds: parseFloat(averageCallDuration.toFixed(2)),
-      totalCost: parseFloat(totalCost.toFixed(2)),
+      totalCallLengthSeconds: 0,                 // Not available without extended columns
+      averageCallLengthSeconds: 0,
+      totalCost: parseFloat(totalCost.toFixed(2)), // From /insights API
       telco: parseFloat(totalCost.toFixed(2)),    // Telco is same as total_cost
-      noConnections: noConnections,              // Calls that didn't connect
-      duplicates: 0, // Not available in insights API
-      blocked: 0, // Not available in insights API
-      ivrHandled: 0, // Not available in insights API
+      noConnections: noConnections,              // Calls that didn't connect (calculated)
+      duplicates: 0,
+      blocked: 0,
+      ivrHandled: 0,
       profit: parseFloat(profit.toFixed(2)),
       margin: parseFloat(margin.toFixed(2)),
-      conversionRate: parseFloat(conversionRate.toFixed(2)),
-      // Additional metrics
-      connectedCalls: connectedCalls,           // Connected calls
+      conversionRate: 0,
+      // Connected calls from /calllogs API with hasConnected filter
+      connectedCalls: connectedCalls,           // Connected calls (from hasConnected=yes)
       connectionRate: parseFloat(connectionRate.toFixed(2)),
-      totalTalkTime: parseFloat(totalTalkTime.toFixed(2)),
-      averageTalkTime: parseFloat(averageTalkTime.toFixed(2)),
-      totalWaitTime: 0, // Not available in insights API
+      totalTalkTime: 0,
+      averageTalkTime: 0,
+      totalWaitTime: 0,
       averageWaitTime: 0,
-      totalHoldTime: 0, // Not available in insights API
+      totalHoldTime: 0,
       averageHoldTime: 0,
-      totalTimeToAnswer: 0, // Not available in insights API
+      totalTimeToAnswer: 0,
       averageTimeToAnswer: 0,
-      totalPostCallDuration: 0, // Not available in insights API
+      totalPostCallDuration: 0,
       averagePostCallDuration: 0,
-      callsWithRecordings: 0, // Not available in insights API
+      callsWithRecordings: 0,
       totalRecordingDuration: 0,
       averageRecordingDuration: 0,
-      totalTransfers: 0, // Not available in insights API
+      totalTransfers: 0,
       averageTransfers: 0,
-      totalConferences: 0, // Not available in insights API
+      totalConferences: 0,
       averageConferences: 0,
-      reroutedCalls: 0, // Not available in insights API
+      reroutedCalls: 0,
       rootCalls: totalCalls,
-      averageQualityScore: null, // Not available in insights API
-      topStates: null, // Not available in insights API
-      topCities: null, // Not available in insights API
-      deviceTypeDistribution: null, // Not available in insights API
-      sourceDistribution: null, // Not available in insights API
-      mediumDistribution: null // Not available in insights API
+      averageQualityScore: null,
+      topStates: null,
+      topCities: null,
+      deviceTypeDistribution: null,
+      sourceDistribution: null,
+      mediumDistribution: null
     };
     
     console.log(`[Campaign Summary V2] Calculated summary for ${targetName}:`);
     console.log(`  - Total Calls (Incoming): ${summary.totalCalls}`);
-    console.log(`  - Completed Calls: ${completedCalls || 'N/A'}`);
-    console.log(`  - Connected Calls: ${summary.connectedCalls} (${summary.connectionRate}%)`);
+    console.log(`  - Connected Calls: ${summary.connectedCalls} (${summary.connectionRate.toFixed(1)}%)`);
     console.log(`  - No Connections: ${summary.noConnections}`);
-    console.log(`  - Total Cost: $${summary.totalCost}`);
+    console.log(`  - Total Cost (Telco): $${summary.totalCost}`);
     console.log(`  - Revenue: $${summary.revenue}`);
     console.log(`  - Payout: $${summary.payout}`);
     console.log(`  - RPC: $${summary.rpc}`);
     console.log(`  - Profit: $${summary.profit}`);
-    console.log(`  - Margin: ${summary.margin}%`);
-    console.log(`  - Conversion Rate: ${summary.conversionRate}%`);
-    console.log(`  - Conversions: ${conversionCount}`);
-    console.log(`  - Average Call Duration: ${summary.averageCallLengthSeconds}s`);
-    console.log(`  - Average Talk Time: ${summary.averageTalkTime}s`);
+    console.log(`  - Margin: ${summary.margin.toFixed(1)}%`);
     
     return summary;
   } catch (error) {
