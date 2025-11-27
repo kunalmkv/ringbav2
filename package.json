@@ -21,6 +21,8 @@
     "migrate:campaign-summary-extended": "node migrate-add-campaign-summary-extended-columns.js",
     "migrate:insights-total-cost": "node migrate-add-insights-total-cost-column.js",
     "migrate:telco": "node migrate-add-telco-column.js",
+    "migrate:call-duration": "node migrate-add-call-duration-column.js",
+    "sync:historical": "node run-ringba-historical-sync.js",
     "scheduler": "node src/services/scheduler.js",
     "scheduler:historical": "node start-historical-scheduler.js",
     "scheduler:current": "node start-current-scheduler.js",

@@ -66,6 +66,7 @@ CREATE TABLE IF NOT EXISTS ringba_calls (
     inbound_phone_number VARCHAR(50),
     payout_amount DECIMAL(10, 2) DEFAULT 0,
     revenue_amount DECIMAL(10, 2) DEFAULT 0,
+    call_duration INTEGER DEFAULT 0,
     target_id VARCHAR(255),
     target_name VARCHAR(255),
     campaign_name VARCHAR(255),
@@ -90,6 +91,7 @@ CREATE INDEX IF NOT EXISTS idx_ringba_calls_caller_id ON ringba_calls(caller_id)
 CREATE INDEX IF NOT EXISTS idx_ringba_calls_caller_id_e164 ON ringba_calls(caller_id_e164);
 CREATE INDEX IF NOT EXISTS idx_ringba_calls_call_date_time ON ringba_calls(call_date_time);
 CREATE INDEX IF NOT EXISTS idx_ringba_calls_target_id ON ringba_calls(target_id);
+CREATE INDEX IF NOT EXISTS idx_ringba_calls_call_duration ON ringba_calls(call_duration);
 
 -- Table to store Ringba campaign summary data (daily tracking)
 CREATE TABLE IF NOT EXISTS ringba_campaign_summary (

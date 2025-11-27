@@ -1,6 +1,6 @@
 // Service to sync cost changes from eLocal to Ringba dashboard
 // Detects changes in elocal_call_data compared to ringba_calls
-// Matches by: 1) Category (from target ID), 2) caller ID (E.164), 3) time duration (±120 minutes), 4) payout (within tolerance)
+// Matches by: 1) Category (from target ID), 2) caller ID (E.164), 3) time window (±30 minutes), 4) call duration (±30 seconds), 5) payout (for scoring)
 // Updates Ringba payout and revenue in bulk
 
 import { dbOps } from '../database/postgres-operations.js';
@@ -116,8 +116,8 @@ const timeDiffMinutes = (date1, date2) => {
 };
 
 // Match eLocal call with Ringba call
-// Uses: 1) Category (from target ID), 2) caller ID (E.164), 3) time range (±120 minutes), 4) payout (within tolerance)
-const matchCall = (elocalCall, ringbaCall, windowMinutes = 120, payoutTolerance = 0.01) => {
+// Uses: 1) Category (from target ID), 2) caller ID (E.164), 3) time range (±30 minutes), 4) call duration (±30 seconds), 5) payout (for scoring)
+const matchCall = (elocalCall, ringbaCall, windowMinutes = 30, durationTolerance = 30, payoutTolerance = 0.01) => {
   // 0. Match category first (from Ringba target ID)
   const ringbaCategory = getCategoryFromTargetId(ringbaCall.target_id);
   const elocalCategory = elocalCall.category || 'STATIC';
@@ -175,19 +175,42 @@ const matchCall = (elocalCall, ringbaCall, windowMinutes = 120, payoutTolerance 
     return null; // Time difference too large
   }
   
-  // 3. Match payout (if available)
+  // 3. Match call duration (if both have duration data)
+  const elocalDuration = Number(elocalCall.total_duration || 0);
+  const ringbaDuration = Number(ringbaCall.call_duration || 0);
+  const durationDiff = Math.abs(elocalDuration - ringbaDuration);
+  
+  // If both have duration data, check if they match within tolerance
+  // This helps distinguish between multiple calls from the same caller
+  let durationMatch = true;
+  if (elocalDuration > 0 && ringbaDuration > 0) {
+    if (durationDiff > durationTolerance) {
+      // Duration doesn't match - this is likely a different call
+      return null;
+    }
+    durationMatch = true;
+  }
+  
+  // 4. Match payout (for scoring, not exclusion)
   const elocalPayout = Number(elocalCall.payout || 0);
   const ringbaPayout = Number(ringbaCall.payout_amount || 0);
   const payoutDiff = Math.abs(elocalPayout - ringbaPayout);
   
   // Calculate match score (lower is better)
+  // Prioritize: duration match > time match > payout match
   let matchScore = timeDiff;
   
+  // Bonus for duration match
+  if (elocalDuration > 0 && ringbaDuration > 0 && durationDiff <= 10) {
+    matchScore = matchScore * 0.5; // Strong bonus for close duration match
+  }
+  
+  // Bonus for payout match
   if (elocalPayout > 0 && ringbaPayout > 0) {
     if (payoutDiff <= payoutTolerance) {
-      matchScore = timeDiff * 0.1; // Exact payout match
+      matchScore = matchScore * 0.1; // Exact payout match
     } else {
-      matchScore = timeDiff + (payoutDiff * 10); // Penalize payout differences
+      matchScore = matchScore + (payoutDiff * 10); // Penalize payout differences
     }
   }
   
@@ -196,6 +219,8 @@ const matchCall = (elocalCall, ringbaCall, windowMinutes = 120, payoutTolerance 
     ringbaCall,
     matchScore,
     timeDiff,
+    durationDiff,
+    durationMatch,
     payoutDiff,
     payoutMatch: payoutDiff <= payoutTolerance
   };
@@ -233,7 +258,7 @@ const getElocalCallsForSync = async (db, startDate, endDate, category = null) =>
     const query = `
       SELECT 
         id, caller_id, date_of_call, payout, category,
-        original_payout, original_revenue
+        original_payout, original_revenue, total_duration
       FROM elocal_call_data
       WHERE SUBSTRING(date_of_call, 1, 10) = ANY(ARRAY[${placeholders}])${categoryFilter}
       ORDER BY caller_id, date_of_call
@@ -280,7 +305,7 @@ const getRingbaCallsForMatching = async (db, startDate, endDate) => {
     const query = `
       SELECT 
         id, inbound_call_id, call_date_time, caller_id, caller_id_e164,
-        payout_amount, revenue_amount, target_id
+        payout_amount, revenue_amount, target_id, call_duration
       FROM ringba_calls
       WHERE SUBSTRING(call_date_time, 1, 10) = ANY(ARRAY[${placeholders}])
       ORDER BY caller_id_e164, call_date_time

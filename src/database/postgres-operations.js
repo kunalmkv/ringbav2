@@ -528,12 +528,13 @@ export const dbOps = (config) => {
                     inbound_phone_number = $4,
                     payout_amount = $5,
                     revenue_amount = $6,
-                    target_id = $7,
-                    target_name = $8,
-                    campaign_name = $9,
-                    publisher_name = $10,
+                    call_duration = $7,
+                    target_id = $8,
+                    target_name = $9,
+                    campaign_name = $10,
+                    publisher_name = $11,
                     updated_at = NOW()
-                  WHERE inbound_call_id = $11
+                  WHERE inbound_call_id = $12
                 `;
                 await pool.query(updateQuery, [
                   call.callDt || '',
@@ -542,6 +543,7 @@ export const dbOps = (config) => {
                   call.inboundPhoneNumber || null,
                   call.payout || 0,
                   call.revenue || 0,
+                  call.callDuration || 0,
                   call.targetId || null,
                   call.targetName || null,
                   call.campaignName || null,
@@ -554,10 +556,10 @@ export const dbOps = (config) => {
                 const insertQuery = `
                   INSERT INTO ringba_calls (
                     inbound_call_id, call_date_time, caller_id, caller_id_e164,
-                    inbound_phone_number, payout_amount, revenue_amount,
+                    inbound_phone_number, payout_amount, revenue_amount, call_duration,
                     target_id, target_name, campaign_name, publisher_name
                   )
-                  VALUES ($1, $2, $3, $4, $5, $6, $7, $8, $9, $10, $11)
+                  VALUES ($1, $2, $3, $4, $5, $6, $7, $8, $9, $10, $11, $12)
                 `;
                 await pool.query(insertQuery, [
                   call.inboundCallId,
@@ -567,6 +569,7 @@ export const dbOps = (config) => {
                   call.inboundPhoneNumber || null,
                   call.payout || 0,
                   call.revenue || 0,
+                  call.callDuration || 0,
                   call.targetId || null,
                   call.targetName || null,
                   call.campaignName || null,

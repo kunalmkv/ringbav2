@@ -95,8 +95,8 @@ export const getCallsByTargetId = (accountId, apiToken) => (targetId, options = 
           'Content-Type': 'application/json'
         };
 
-        // Use minimal set of columns known to work with Ringba API
-        // Extended columns like callDuration, talkTime, etc. return "Unknown value column" error
+        // Use columns known to work with Ringba API
+        // Note: callLengthInSeconds works, but callDuration does not
         const body = {
           reportStart: startDate.toISOString(),
           reportEnd: endDate.toISOString(),
@@ -114,14 +114,14 @@ export const getCallsByTargetId = (accountId, apiToken) => (targetId, options = 
             // Financial data (essential for cost tracking)
             { column: 'conversionAmount' },  // Revenue
             { column: 'payoutAmount' },      // Payout (what we pay to Ringba - the cost)
+            // Call duration
+            { column: 'callLengthInSeconds' }, // Duration of the call in seconds
             // Call routing
             { column: 'inboundPhoneNumber' },
             { column: 'tag:InboundNumber:Number' }, // Caller ID
             // Campaign info
             { column: 'campaignName' },
             { column: 'publisherName' }
-            // NOTE: Extended columns like callDuration, connected, talkTime, etc.
-            // are not supported by Ringba /calllogs API and cause "Unknown value column" errors
           ],
           filters: [
             {
@@ -171,6 +171,11 @@ export const getCallsByTargetId = (accountId, apiToken) => (targetId, options = 
           // For now, we'll use payoutAmount as the Ringba cost (what we pay)
           const ringbaCost = payout; // Payout is the cost we pay to Ringba
           
+          // Parse call duration
+          const callDuration = record.callLengthInSeconds !== undefined && record.callLengthInSeconds !== null
+            ? parseInt(record.callLengthInSeconds, 10)
+            : 0;
+          
           const call = {
             // Core call identification
             inboundCallId: record.inboundCallId || null,
@@ -181,16 +186,14 @@ export const getCallsByTargetId = (accountId, apiToken) => (targetId, options = 
             revenue: revenue,
             payout: payout,
             ringbaCost: ringbaCost, // Cost charged by Ringba (what we pay for this call)
+            // Call duration
+            callDuration: callDuration, // Duration in seconds
             // Call routing info
             inboundPhoneNumber: record.inboundPhoneNumber || null,
             callerId: record['tag:InboundNumber:Number'] || null,
             // Campaign info
             campaignName: record.campaignName || null,
-            publisherName: record.publisherName || null,
-            // Extended fields (not fetched from API, set to null for compatibility)
-            callDuration: null,
-            connected: null,
-            talkTime: null
+            publisherName: record.publisherName || null
           };
 
           allCalls.push(call);

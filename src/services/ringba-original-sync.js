@@ -155,6 +155,9 @@ const fetchAllRingbaCalls = async (accountId, apiToken, startDate, endDate) => {
             // Keep original format if conversion fails
           }
           
+          // Get call duration
+          const callDuration = call.callDuration || 0;
+          
           allCalls.push({
             inboundCallId: call.inboundCallId,
             callDt: callDtEST, // Store EST converted date (YYYY-MM-DDTHH:mm:ss)
@@ -164,6 +167,7 @@ const fetchAllRingbaCalls = async (accountId, apiToken, startDate, endDate) => {
             inboundPhoneNumber: call.inboundPhoneNumber || null,
             payout: payout,
             revenue: revenue,
+            callDuration: callDuration, // Duration in seconds
             targetId: targetId,
             targetName: call.targetName || targetName,
             campaignName: call.campaignName || null,
