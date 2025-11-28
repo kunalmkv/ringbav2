@@ -28,6 +28,7 @@
     "scheduler:current": "node start-current-scheduler.js",
     "scheduler:ringba-original": "node start-ringba-original-scheduler.js",
     "scheduler:ringba-cost": "node start-ringba-cost-scheduler.js",
+    "scheduler:ringba-cost-current-day": "node start-ringba-cost-sync-current-day.js",
     "scheduler:auth-refresh": "node start-auth-refresh-scheduler.js",
     "scheduler:campaign-summary": "node start-campaign-summary-scheduler.js",
     "dashboard": "node dashboard-server.js",
