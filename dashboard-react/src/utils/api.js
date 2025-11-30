@@ -3,10 +3,12 @@
 
 const getBasePath = () => {
   const pathname = window.location.pathname;
-  // If pathname includes /ringba-sync-dashboard, use it as base path
+  // If pathname includes /ringba-sync-dashboard, use it as base path (for path-based serving)
+  // Otherwise, serve at root (for subdomain at root like ringba.insidefi.co)
   if (pathname.includes('/ringba-sync-dashboard')) {
     return '/ringba-sync-dashboard';
   }
+  // For subdomain at root, return empty string so API calls go to /api
   return '';
 };
 
