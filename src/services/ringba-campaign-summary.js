@@ -95,6 +95,73 @@ const getTotalCostFromInsights = async (accountId, apiToken, identifier, startDa
 };
 
 /**
+ * Get connected calls count using hasConnected filter (more accurate than filtering by connected field)
+ * This uses the API's hasConnected filter which is more reliable
+ */
+const getConnectedCallsCount = async (accountId, apiToken, filterColumn, filterValue, startDate, endDate) => {
+  try {
+    const url = `${RINGBA_BASE_URL}/${accountId}/calllogs`;
+    const headers = {
+      'Authorization': `Token ${apiToken}`,
+      'Content-Type': 'application/json'
+    };
+    
+    const body = {
+      reportStart: startDate.toISOString(),
+      reportEnd: endDate.toISOString(),
+      offset: 0,
+      size: 1, // We only need the count
+      valueColumns: [
+        { column: 'inboundCallId' } // Minimal column for count
+      ],
+      filters: [
+        {
+          anyConditionToMatch: [
+            {
+              column: filterColumn,
+              comparisonType: 'EQUALS',
+              value: filterValue,
+              isNegativeMatch: false
+            }
+          ]
+        },
+        {
+          anyConditionToMatch: [
+            {
+              column: 'hasConnected',
+              comparisonType: 'EQUALS',
+              value: 'yes',
+              isNegativeMatch: false
+            }
+          ]
+        }
+      ],
+      formatDateTime: true
+    };
+    
+    const response = await fetch(url, {
+      method: 'POST',
+      headers,
+      body: JSON.stringify(body)
+    });
+    
+    if (!response.ok) {
+      // If API fails, return null to fall back to manual filtering
+      console.log(`[Campaign Summary] hasConnected filter API returned ${response.status}, will use manual filtering`);
+      return null;
+    }
+    
+    const data = await response.json();
+    const totalCount = data.report?.totalCount || 0;
+    
+    return totalCount;
+  } catch (error) {
+    console.log(`[Campaign Summary] Error fetching connected calls count: ${error.message}, will use manual filtering`);
+    return null;
+  }
+};
+
+/**
  * Fetch calls by campaign ID from Ringba API
  */
 const getCallsByCampaignId = async (accountId, apiToken, campaignId, startDate, endDate) => {
@@ -127,12 +194,13 @@ const getCallsByCampaignId = async (accountId, apiToken, campaignId, startDate, 
             { column: 'targetId' },
             { column: 'conversionAmount' },  // Revenue
             { column: 'payoutAmount' },      // Payout
+            { column: 'callLengthInSeconds' }, // Call duration in seconds (for completed calls calculation)
             { column: 'inboundPhoneNumber' },
             { column: 'tag:InboundNumber:Number' }, // Caller ID
             { column: 'campaignName' },
             { column: 'campaignId' },
             { column: 'publisherName' }
-            // Note: Additional columns like callDuration, connected, etc. may not be available
+            // Note: Additional columns like connected, etc. may not be available
             // in the /calllogs endpoint. They are available in /calllogs/detail endpoint.
             // We'll try to fetch them but handle errors gracefully.
           ],
@@ -168,10 +236,12 @@ const getCallsByCampaignId = async (accountId, apiToken, campaignId, startDate, 
         // Not JSON, use as-is
       }
       
-      // If it's a column error, try with basic columns only
+      // If it's a column error, try with basic columns only (but keep callLengthInSeconds if possible)
       if (response.status === 422 && (errorJson?.message?.includes('Unknown value column') || errorText.includes('Unknown value column'))) {
         console.log(`[Campaign Summary] Column error detected, retrying with basic columns only...`);
-        body.valueColumns = [
+        // Try to keep callLengthInSeconds if the error wasn't about it
+        const errorColumn = errorJson?.message?.match(/Unknown value column[^:]*:?\s*(\w+)/i)?.[1];
+        const basicColumns = [
           { column: 'inboundCallId' },
           { column: 'callDt' },
           { column: 'targetName' },
@@ -184,6 +254,11 @@ const getCallsByCampaignId = async (accountId, apiToken, campaignId, startDate, 
           { column: 'campaignId' },
           { column: 'publisherName' }
         ];
+        // Only add callLengthInSeconds if the error wasn't about it
+        if (errorColumn !== 'callLengthInSeconds') {
+          basicColumns.splice(6, 0, { column: 'callLengthInSeconds' });
+        }
+        body.valueColumns = basicColumns;
         
         response = await fetch(url, {
           method: 'POST',
@@ -211,6 +286,11 @@ const getCallsByCampaignId = async (accountId, apiToken, campaignId, startDate, 
         ? Number(record.payoutAmount) 
         : 0;
       
+      // Map callLengthInSeconds to callDuration (for completed calls calculation)
+      const callDuration = record.callLengthInSeconds !== undefined && record.callLengthInSeconds !== null
+        ? Number(record.callLengthInSeconds)
+        : (record.callDuration !== undefined && record.callDuration !== null ? Number(record.callDuration) : null);
+      
       const call = {
         inboundCallId: record.inboundCallId || null,
         callDate: record.callDt || null,
@@ -220,7 +300,7 @@ const getCallsByCampaignId = async (accountId, apiToken, campaignId, startDate, 
         campaignName: record.campaignName || null,
         revenue: revenue,
         payout: payout,
-        callDuration: record.callDuration ? Number(record.callDuration) : null,
+        callDuration: callDuration,
         connected: record.connected !== undefined ? Boolean(record.connected) : null,
         reroutedFromInboundCallId: record.reroutedFromInboundCallId || null,
         rootInboundCallId: record.rootInboundCallId || null,
@@ -399,8 +479,40 @@ const fetchCampaignSummary = async (accountId, apiToken, identifier, identifierN
       return sum + (recordingDuration && !isNaN(recordingDuration) ? Number(recordingDuration) : 0);
     }, 0);
     
-    // Count connected calls
-    const connectedCalls = calls.filter(call => call.connected === true).length;
+    // Get connected calls count using hasConnected filter (more accurate)
+    // Try API filter first, fall back to manual filtering if it fails
+    const filterColumn = useCampaignId ? 'campaignId' : 'targetId';
+    let connectedCalls = null;
+    try {
+      connectedCalls = await getConnectedCallsCount(accountId, apiToken, filterColumn, identifier, startDate, endDate);
+      if (connectedCalls !== null) {
+        console.log(`[Campaign Summary] Connected calls from API filter: ${connectedCalls}`);
+      }
+    } catch (error) {
+      console.log(`[Campaign Summary] Error getting connected calls count: ${error.message}`);
+    }
+    
+    // Fall back to manual filtering if API filter failed
+    if (connectedCalls === null) {
+      connectedCalls = calls.filter(call => call.connected === true).length;
+      console.log(`[Campaign Summary] Connected calls from manual filtering: ${connectedCalls}`);
+    }
+    
+    // Calculate completed calls (calls with duration > 0 seconds)
+    // A completed call is one that has a duration, indicating it was not immediately hung up
+    const completedCalls = calls.filter(call => {
+      const duration = call.callDuration;
+      return duration && !isNaN(duration) && Number(duration) > 0;
+    }).length;
+    
+    // Debug: Log call duration statistics
+    const callsWithDuration = calls.filter(call => call.callDuration !== null && call.callDuration !== undefined).length;
+    const callsWithZeroDuration = calls.filter(call => call.callDuration === 0).length;
+    const callsWithNoDuration = calls.filter(call => call.callDuration === null || call.callDuration === undefined).length;
+    console.log(`[Campaign Summary] Call duration stats: ${callsWithDuration} with duration, ${callsWithZeroDuration} with 0 duration, ${callsWithNoDuration} with no duration`);
+    
+    // Calculate completion rate
+    const completionRate = totalCalls > 0 ? (completedCalls / totalCalls) * 100 : 0;
     
     // Count calls with recordings
     const callsWithRecordings = calls.filter(call => call.recordingUrl || call.recordingDuration).length;
@@ -570,7 +682,6 @@ const fetchCampaignSummary = async (accountId, apiToken, identifier, identifierN
       payout: parseFloat(totalPayout.toFixed(2)),
       rpc: parseFloat(rpc.toFixed(2)),
       totalCallLengthSeconds: totalCallDuration,
-      averageCallLengthSeconds: parseFloat(averageCallLength.toFixed(2)),
       totalCost: parseFloat(totalCost.toFixed(2)),
       insightsTotalCost: insightsTotalCost !== null && insightsTotalCost !== undefined && !isNaN(insightsTotalCost) 
         ? parseFloat(insightsTotalCost.toFixed(2)) 
@@ -578,44 +689,21 @@ const fetchCampaignSummary = async (accountId, apiToken, identifier, identifierN
       telco: parseFloat(totalCost.toFixed(2)), // Telco is same as total_cost
       noConnections: noConnections,
       duplicates: duplicates,
-      blocked: blocked,
-      ivrHandled: ivrHandled,
-      profit: parseFloat(profit.toFixed(2)),
       margin: parseFloat(margin.toFixed(2)),
       conversionRate: parseFloat(conversionRate.toFixed(2)),
       // Additional metrics
       connectedCalls: connectedCalls,
       connectionRate: parseFloat(connectionRate.toFixed(2)),
-      totalTalkTime: totalTalkTime,
-      averageTalkTime: parseFloat(averageTalkTime.toFixed(2)),
-      totalWaitTime: totalWaitTime,
-      averageWaitTime: parseFloat(averageWaitTime.toFixed(2)),
-      totalHoldTime: totalHoldTime,
-      averageHoldTime: parseFloat(averageHoldTime.toFixed(2)),
-      totalTimeToAnswer: totalTimeToAnswer,
-      averageTimeToAnswer: parseFloat(averageTimeToAnswer.toFixed(2)),
-      totalPostCallDuration: totalPostCallDuration,
-      averagePostCallDuration: parseFloat(averagePostCallDuration.toFixed(2)),
-      callsWithRecordings: callsWithRecordings,
-      totalRecordingDuration: totalRecordingDuration,
-      averageRecordingDuration: parseFloat(averageRecordingDuration.toFixed(2)),
-      totalTransfers: totalTransfers,
-      averageTransfers: totalCalls > 0 ? parseFloat((totalTransfers / totalCalls).toFixed(2)) : 0,
-      totalConferences: totalConferences,
-      averageConferences: totalCalls > 0 ? parseFloat((totalConferences / totalCalls).toFixed(2)) : 0,
-      reroutedCalls: reroutedCalls,
-      rootCalls: rootCalls,
-      averageQualityScore: averageQualityScore !== null ? parseFloat(averageQualityScore.toFixed(2)) : null,
-      topStates: JSON.stringify(topStates),
-      topCities: JSON.stringify(topCities),
-      deviceTypeDistribution: JSON.stringify(deviceTypeCounts),
-      sourceDistribution: JSON.stringify(sourceCounts),
-      mediumDistribution: JSON.stringify(mediumCounts)
+      // Completed calls (calls with duration > 0) - from v2
+      completedCalls: completedCalls,
+      completionRate: parseFloat(completionRate.toFixed(2)),
+      rootCalls: rootCalls
     };
     
     console.log(`[Campaign Summary] Calculated summary for ${targetName}:`);
     console.log(`  - Total Calls: ${summary.totalCalls}`);
     console.log(`  - Connected Calls: ${summary.connectedCalls} (${summary.connectionRate}%)`);
+    console.log(`  - Completed Calls: ${summary.completedCalls} (${summary.completionRate}%)`);
     console.log(`  - Revenue: $${summary.revenue}`);
     console.log(`  - Payout: $${summary.payout}`);
     console.log(`  - Total Cost: $${summary.totalCost}`);
@@ -623,17 +711,8 @@ const fetchCampaignSummary = async (accountId, apiToken, identifier, identifierN
       console.log(`  - Insights Total Cost: $${summary.insightsTotalCost}`);
     }
     console.log(`  - RPC: $${summary.rpc}`);
-    console.log(`  - Profit: $${summary.profit}`);
     console.log(`  - Margin: ${summary.margin}%`);
     console.log(`  - Conversion Rate: ${summary.conversionRate}%`);
-    console.log(`  - Average Talk Time: ${summary.averageTalkTime}s`);
-    console.log(`  - Average Wait Time: ${summary.averageWaitTime}s`);
-    console.log(`  - Average Time to Answer: ${summary.averageTimeToAnswer}s`);
-    console.log(`  - Total Transfers: ${summary.totalTransfers}`);
-    console.log(`  - Rerouted Calls: ${summary.reroutedCalls}`);
-    if (summary.averageQualityScore !== null) {
-      console.log(`  - Average Quality Score: ${summary.averageQualityScore}`);
-    }
     
     return summary;
   } catch (error) {
@@ -652,6 +731,7 @@ const saveCampaignSummary = async (db, summary) => {
     let hasExtendedColumns = false;
     let hasInsightsTotalCost = false;
     let hasTelco = false;
+    let hasCompletedCalls = false;
     try {
       const checkQuery = `
         SELECT column_name 
@@ -681,20 +761,37 @@ const saveCampaignSummary = async (db, summary) => {
       `;
       const checkTelcoResult = await db.pool.query(checkTelcoQuery);
       hasTelco = checkTelcoResult.rows.length > 0;
+      
+      // Check if completed_calls column exists
+      const checkCompletedCallsQuery = `
+        SELECT column_name 
+        FROM information_schema.columns 
+        WHERE table_name = 'ringba_campaign_summary' 
+        AND column_name = 'completed_calls'
+      `;
+      const checkCompletedCallsResult = await db.pool.query(checkCompletedCallsQuery);
+      hasCompletedCalls = checkCompletedCallsResult.rows.length > 0;
     } catch (e) {
       // Extended columns don't exist yet, use basic query
       hasExtendedColumns = false;
       hasInsightsTotalCost = false;
       hasTelco = false;
+      hasCompletedCalls = false;
     }
     
     let query, params;
     
     if (hasExtendedColumns) {
-      // Build column list and values based on whether insights_total_cost and telco exist
+      // Build column list and values based on whether insights_total_cost, telco, and completed_calls exist
       const additionalColumns = [];
       const additionalValues = [];
-      let paramIndex = 47; // Start after the 46 base columns
+      let paramIndex = 19; // Start after the 18 base columns
+      
+      if (hasCompletedCalls) {
+        additionalColumns.push('completed_calls', 'completion_rate');
+        additionalValues.push(`$${paramIndex}`, `$${paramIndex + 1}`);
+        paramIndex += 2;
+      }
       
       if (hasInsightsTotalCost) {
         additionalColumns.push('insights_total_cost');
@@ -711,30 +808,18 @@ const saveCampaignSummary = async (db, summary) => {
       const additionalColumnsStr = additionalColumns.length > 0 ? ', ' + additionalColumns.join(', ') : '';
       const additionalValuesStr = additionalValues.length > 0 ? ', ' + additionalValues.join(', ') : '';
       
-      // Full query with all extended columns
+      // Full query with essential columns only (unused columns removed)
       query = `
         INSERT INTO ringba_campaign_summary (
           campaign_name, campaign_id, target_id, target_name, summary_date,
           total_calls, revenue, payout, rpc,
-          total_call_length_seconds, average_call_length_seconds, total_cost,
-          no_connections, duplicates, blocked, ivr_handled,
-          profit, margin, conversion_rate,
+          total_call_length_seconds, total_cost,
+          no_connections, duplicates,
+          margin, conversion_rate,
           connected_calls, connection_rate,
-          total_talk_time, average_talk_time,
-          total_wait_time, average_wait_time,
-          total_hold_time, average_hold_time,
-          total_time_to_answer, average_time_to_answer,
-          total_post_call_duration, average_post_call_duration,
-          calls_with_recordings, total_recording_duration, average_recording_duration,
-          total_transfers, average_transfers,
-          total_conferences, average_conferences,
-          rerouted_calls, root_calls,
-          average_quality_score,
-          top_states, top_cities,
-          device_type_distribution, source_distribution, medium_distribution${additionalColumnsStr}
+          root_calls${additionalColumnsStr}
         ) VALUES (
-          $1, $2, $3, $4, $5, $6, $7, $8, $9, $10, $11, $12, $13, $14, $15, $16, $17, $18, $19,
-          $20, $21, $22, $23, $24, $25, $26, $27, $28, $29, $30, $31, $32, $33, $34, $35, $36, $37, $38, $39, $40, $41, $42, $43, $44, $45, $46${additionalValuesStr}
+          $1, $2, $3, $4, $5, $6, $7, $8, $9, $10, $11, $12, $13, $14, $15, $16, $17, $18${additionalValuesStr}
         )
         ON CONFLICT (campaign_name, summary_date)
         DO UPDATE SET
@@ -746,42 +831,14 @@ const saveCampaignSummary = async (db, summary) => {
           payout = EXCLUDED.payout,
           rpc = EXCLUDED.rpc,
           total_call_length_seconds = EXCLUDED.total_call_length_seconds,
-          average_call_length_seconds = EXCLUDED.average_call_length_seconds,
           total_cost = EXCLUDED.total_cost,
           no_connections = EXCLUDED.no_connections,
           duplicates = EXCLUDED.duplicates,
-          blocked = EXCLUDED.blocked,
-          ivr_handled = EXCLUDED.ivr_handled,
-          profit = EXCLUDED.profit,
           margin = EXCLUDED.margin,
           conversion_rate = EXCLUDED.conversion_rate,
           connected_calls = EXCLUDED.connected_calls,
           connection_rate = EXCLUDED.connection_rate,
-          total_talk_time = EXCLUDED.total_talk_time,
-          average_talk_time = EXCLUDED.average_talk_time,
-          total_wait_time = EXCLUDED.total_wait_time,
-          average_wait_time = EXCLUDED.average_wait_time,
-          total_hold_time = EXCLUDED.total_hold_time,
-          average_hold_time = EXCLUDED.average_hold_time,
-          total_time_to_answer = EXCLUDED.total_time_to_answer,
-          average_time_to_answer = EXCLUDED.average_time_to_answer,
-          total_post_call_duration = EXCLUDED.total_post_call_duration,
-          average_post_call_duration = EXCLUDED.average_post_call_duration,
-          calls_with_recordings = EXCLUDED.calls_with_recordings,
-          total_recording_duration = EXCLUDED.total_recording_duration,
-          average_recording_duration = EXCLUDED.average_recording_duration,
-          total_transfers = EXCLUDED.total_transfers,
-          average_transfers = EXCLUDED.average_transfers,
-          total_conferences = EXCLUDED.total_conferences,
-          average_conferences = EXCLUDED.average_conferences,
-          rerouted_calls = EXCLUDED.rerouted_calls,
-          root_calls = EXCLUDED.root_calls,
-          average_quality_score = EXCLUDED.average_quality_score,
-          top_states = EXCLUDED.top_states,
-          top_cities = EXCLUDED.top_cities,
-          device_type_distribution = EXCLUDED.device_type_distribution,
-          source_distribution = EXCLUDED.source_distribution,
-          medium_distribution = EXCLUDED.medium_distribution${hasInsightsTotalCost ? ',\n          insights_total_cost = EXCLUDED.insights_total_cost' : ''}${hasTelco ? ',\n          telco = EXCLUDED.telco' : ''},
+          root_calls = EXCLUDED.root_calls${hasCompletedCalls ? ',\n          completed_calls = EXCLUDED.completed_calls,\n          completion_rate = EXCLUDED.completion_rate' : ''}${hasInsightsTotalCost ? ',\n          insights_total_cost = EXCLUDED.insights_total_cost' : ''}${hasTelco ? ',\n          telco = EXCLUDED.telco' : ''},
           updated_at = CURRENT_TIMESTAMP
         RETURNING id
       `;
@@ -797,43 +854,21 @@ const saveCampaignSummary = async (db, summary) => {
         summary.payout,
         summary.rpc,
         summary.totalCallLengthSeconds,
-        summary.averageCallLengthSeconds,
         summary.totalCost,
         summary.noConnections,
         summary.duplicates,
-        summary.blocked,
-        summary.ivrHandled,
-        summary.profit,
         summary.margin,
         summary.conversionRate,
         summary.connectedCalls || 0,
         summary.connectionRate || 0,
-        summary.totalTalkTime || 0,
-        summary.averageTalkTime || 0,
-        summary.totalWaitTime || 0,
-        summary.averageWaitTime || 0,
-        summary.totalHoldTime || 0,
-        summary.averageHoldTime || 0,
-        summary.totalTimeToAnswer || 0,
-        summary.averageTimeToAnswer || 0,
-        summary.totalPostCallDuration || 0,
-        summary.averagePostCallDuration || 0,
-        summary.callsWithRecordings || 0,
-        summary.totalRecordingDuration || 0,
-        summary.averageRecordingDuration || 0,
-        summary.totalTransfers || 0,
-        summary.averageTransfers || 0,
-        summary.totalConferences || 0,
-        summary.averageConferences || 0,
-        summary.reroutedCalls || 0,
-        summary.rootCalls || 0,
-        summary.averageQualityScore || null,
-        summary.topStates || null,
-        summary.topCities || null,
-        summary.deviceTypeDistribution || null,
-        summary.sourceDistribution || null,
-        summary.mediumDistribution || null
+        summary.rootCalls || 0
       ];
+      
+      // Add completed_calls and completion_rate if column exists
+      if (hasCompletedCalls) {
+        params.push(summary.completedCalls || 0);
+        params.push(summary.completionRate || 0);
+      }
       
       // Add insights_total_cost if column exists
       if (hasInsightsTotalCost) {
@@ -850,11 +885,11 @@ const saveCampaignSummary = async (db, summary) => {
         INSERT INTO ringba_campaign_summary (
           campaign_name, campaign_id, target_id, target_name, summary_date,
           total_calls, revenue, payout, rpc,
-          total_call_length_seconds, average_call_length_seconds, total_cost,
-          no_connections, duplicates, blocked, ivr_handled,
-          profit, margin, conversion_rate
+          total_call_length_seconds, total_cost,
+          no_connections, duplicates,
+          margin, conversion_rate
         ) VALUES (
-          $1, $2, $3, $4, $5, $6, $7, $8, $9, $10, $11, $12, $13, $14, $15, $16, $17, $18, $19
+          $1, $2, $3, $4, $5, $6, $7, $8, $9, $10, $11, $12, $13, $14, $15
         )
         ON CONFLICT (campaign_name, summary_date)
         DO UPDATE SET
@@ -866,13 +901,9 @@ const saveCampaignSummary = async (db, summary) => {
           payout = EXCLUDED.payout,
           rpc = EXCLUDED.rpc,
           total_call_length_seconds = EXCLUDED.total_call_length_seconds,
-          average_call_length_seconds = EXCLUDED.average_call_length_seconds,
           total_cost = EXCLUDED.total_cost,
           no_connections = EXCLUDED.no_connections,
           duplicates = EXCLUDED.duplicates,
-          blocked = EXCLUDED.blocked,
-          ivr_handled = EXCLUDED.ivr_handled,
-          profit = EXCLUDED.profit,
           margin = EXCLUDED.margin,
           conversion_rate = EXCLUDED.conversion_rate,
           updated_at = CURRENT_TIMESTAMP
@@ -890,13 +921,9 @@ const saveCampaignSummary = async (db, summary) => {
         summary.payout,
         summary.rpc,
         summary.totalCallLengthSeconds,
-        summary.averageCallLengthSeconds,
         summary.totalCost,
         summary.noConnections,
         summary.duplicates,
-        summary.blocked,
-        summary.ivrHandled,
-        summary.profit,
         summary.margin,
         summary.conversionRate
       ];
@@ -929,13 +956,9 @@ const createCombinedSummary = (allSummaries, targetDate) => {
     payout: 0,
     rpc: 0,
     totalCallLengthSeconds: 0,
-    averageCallLengthSeconds: 0,
     totalCost: 0,
     noConnections: 0,
     duplicates: 0,
-    blocked: 0,
-    ivrHandled: 0,
-    profit: 0,
     margin: 0,
     conversionRate: 0
   };
@@ -949,40 +972,18 @@ const createCombinedSummary = (allSummaries, targetDate) => {
     combined.totalCost += summary.totalCost || 0;
     combined.noConnections += summary.noConnections || 0;
     combined.duplicates += summary.duplicates || 0;
-    combined.blocked += summary.blocked || 0;
-    combined.ivrHandled += summary.ivrHandled || 0;
     // Extended metrics
     combined.connectedCalls = (combined.connectedCalls || 0) + (summary.connectedCalls || 0);
-    combined.totalTalkTime = (combined.totalTalkTime || 0) + (summary.totalTalkTime || 0);
-    combined.totalWaitTime = (combined.totalWaitTime || 0) + (summary.totalWaitTime || 0);
-    combined.totalHoldTime = (combined.totalHoldTime || 0) + (summary.totalHoldTime || 0);
-    combined.totalTimeToAnswer = (combined.totalTimeToAnswer || 0) + (summary.totalTimeToAnswer || 0);
-    combined.totalPostCallDuration = (combined.totalPostCallDuration || 0) + (summary.totalPostCallDuration || 0);
-    combined.callsWithRecordings = (combined.callsWithRecordings || 0) + (summary.callsWithRecordings || 0);
-    combined.totalRecordingDuration = (combined.totalRecordingDuration || 0) + (summary.totalRecordingDuration || 0);
-    combined.totalTransfers = (combined.totalTransfers || 0) + (summary.totalTransfers || 0);
-    combined.totalConferences = (combined.totalConferences || 0) + (summary.totalConferences || 0);
-    combined.reroutedCalls = (combined.reroutedCalls || 0) + (summary.reroutedCalls || 0);
+    combined.completedCalls = (combined.completedCalls || 0) + (summary.completedCalls || 0);
     combined.rootCalls = (combined.rootCalls || 0) + (summary.rootCalls || 0);
   }
   
   // Calculate derived metrics
   combined.rpc = combined.totalCalls > 0 ? combined.revenue / combined.totalCalls : 0;
-  combined.averageCallLengthSeconds = combined.totalCalls > 0 
-    ? combined.totalCallLengthSeconds / combined.totalCalls 
-    : 0;
-  combined.profit = combined.revenue - combined.payout;
-  combined.margin = combined.revenue > 0 ? (combined.profit / combined.revenue) * 100 : 0;
+  combined.margin = combined.revenue > 0 ? ((combined.revenue - combined.payout) / combined.revenue) * 100 : 0;
   // Extended metrics
   combined.connectionRate = combined.totalCalls > 0 ? (combined.connectedCalls / combined.totalCalls) * 100 : 0;
-  combined.averageTalkTime = combined.connectedCalls > 0 ? combined.totalTalkTime / combined.connectedCalls : 0;
-  combined.averageWaitTime = combined.totalCalls > 0 ? combined.totalWaitTime / combined.totalCalls : 0;
-  combined.averageHoldTime = combined.connectedCalls > 0 ? combined.totalHoldTime / combined.connectedCalls : 0;
-  combined.averageTimeToAnswer = combined.connectedCalls > 0 ? combined.totalTimeToAnswer / combined.connectedCalls : 0;
-  combined.averagePostCallDuration = combined.totalCalls > 0 ? combined.totalPostCallDuration / combined.totalCalls : 0;
-  combined.averageRecordingDuration = combined.callsWithRecordings > 0 ? combined.totalRecordingDuration / combined.callsWithRecordings : 0;
-  combined.averageTransfers = combined.totalCalls > 0 ? combined.totalTransfers / combined.totalCalls : 0;
-  combined.averageConferences = combined.totalCalls > 0 ? combined.totalConferences / combined.totalCalls : 0;
+  combined.completionRate = combined.totalCalls > 0 ? (combined.completedCalls / combined.totalCalls) * 100 : 0;
   
   // Calculate conversion rate (calls with revenue / total calls)
   // We need to count calls with revenue from all summaries
@@ -1001,21 +1002,12 @@ const createCombinedSummary = (allSummaries, targetDate) => {
   combined.revenue = parseFloat(combined.revenue.toFixed(2));
   combined.payout = parseFloat(combined.payout.toFixed(2));
   combined.rpc = parseFloat(combined.rpc.toFixed(2));
-  combined.averageCallLengthSeconds = parseFloat(combined.averageCallLengthSeconds.toFixed(2));
   combined.totalCost = parseFloat(combined.totalCost.toFixed(3)); // Total Cost shows 3 decimals in screenshot
-  combined.profit = parseFloat(combined.profit.toFixed(2));
   combined.margin = parseFloat(combined.margin.toFixed(2));
   combined.conversionRate = parseFloat(combined.conversionRate.toFixed(2));
   // Extended metrics
   combined.connectionRate = parseFloat(combined.connectionRate.toFixed(2));
-  combined.averageTalkTime = parseFloat(combined.averageTalkTime.toFixed(2));
-  combined.averageWaitTime = parseFloat(combined.averageWaitTime.toFixed(2));
-  combined.averageHoldTime = parseFloat(combined.averageHoldTime.toFixed(2));
-  combined.averageTimeToAnswer = parseFloat(combined.averageTimeToAnswer.toFixed(2));
-  combined.averagePostCallDuration = parseFloat(combined.averagePostCallDuration.toFixed(2));
-  combined.averageRecordingDuration = parseFloat(combined.averageRecordingDuration.toFixed(2));
-  combined.averageTransfers = parseFloat(combined.averageTransfers.toFixed(2));
-  combined.averageConferences = parseFloat(combined.averageConferences.toFixed(2));
+  combined.completionRate = parseFloat(combined.completionRate.toFixed(2));
   
   return combined;
 };
@@ -1100,7 +1092,6 @@ export const syncCampaignSummaryByCampaignId = async (config, campaignId, date =
     console.log(`Revenue: $${summary.revenue}`);
     console.log(`Payout: $${summary.payout}`);
     console.log(`RPC: $${summary.rpc}`);
-    console.log(`Profit: $${summary.profit}`);
     console.log(`Margin: ${summary.margin}%`);
     console.log(`Conversion Rate: ${summary.conversionRate}%`);
     console.log('='.repeat(70));
@@ -1223,13 +1214,10 @@ export const syncCampaignSummary = async (config, date = null) => {
       console.log(`  - Revenue: $${combinedSummary.revenue}`);
       console.log(`  - Payout: $${combinedSummary.payout}`);
       console.log(`  - RPC: $${combinedSummary.rpc}`);
-      console.log(`  - Profit: $${combinedSummary.profit}`);
       console.log(`  - Margin: ${combinedSummary.margin}%`);
       console.log(`  - Conversion Rate: ${combinedSummary.conversionRate}%`);
       console.log(`  - No Connections: ${combinedSummary.noConnections}`);
       console.log(`  - Duplicates: ${combinedSummary.duplicates}`);
-      console.log(`  - Blocked: ${combinedSummary.blocked}`);
-      console.log(`  - IVR Handled: ${combinedSummary.ivrHandled}`);
       console.log(`  - Total Cost: $${combinedSummary.totalCost}`);
       
       // Save combined summary to database

@@ -8,6 +8,7 @@ import ServiceHistory from './components/ServiceHistory';
 import RecentActivity from './components/RecentActivity';
 import ChargebackTracker from './components/ChargebackTracker';
 import PayoutComparison from './components/PayoutComparison';
+import RingbaDashboard from './components/RingbaDashboard';
 import Footer from './components/Footer';
 
 function App() {
@@ -51,6 +52,7 @@ function App() {
         <Statistics stats={stats} />
         <RingbaStatus stats={stats} />
         <PayoutComparison />
+        <RingbaDashboard />
         <ChargebackTracker chargebackData={chargeback} loading={loading} />
         <ServiceHistory history={history} onFilterChange={handleHistoryFilter} />
         <RecentActivity activity={activity} />

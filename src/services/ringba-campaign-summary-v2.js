@@ -135,6 +135,8 @@ const getCallLogs = async (accountId, apiToken, filterColumn, filterValue, start
       // Financial data
       { column: 'conversionAmount' },  // Revenue
       { column: 'payoutAmount' },      // Payout
+      // Call duration (to determine completed calls)
+      { column: 'callLengthInSeconds' }, // Duration in seconds
       // Call routing
       { column: 'inboundPhoneNumber' },
       { column: 'tag:InboundNumber:Number' }, // Caller ID
@@ -171,6 +173,10 @@ const getCallLogs = async (accountId, apiToken, filterColumn, filterValue, start
     
     // Process records
     for (const record of records) {
+      const callDuration = record.callLengthInSeconds !== undefined && record.callLengthInSeconds !== null
+        ? parseInt(record.callLengthInSeconds, 10)
+        : 0;
+      
       allCalls.push({
         inboundCallId: record.inboundCallId || null,
         callDate: record.callDt || null,
@@ -178,6 +184,7 @@ const getCallLogs = async (accountId, apiToken, filterColumn, filterValue, start
         targetName: record.targetName || null,
         revenue: Number(record.conversionAmount || 0),
         payout: Number(record.payoutAmount || 0),
+        callDuration: callDuration, // Duration in seconds (0 if not available)
         inboundPhoneNumber: record.inboundPhoneNumber || null,
         callerId: record['tag:InboundNumber:Number'] || null,
         campaignName: record.campaignName || null,
@@ -200,27 +207,53 @@ const getCallLogs = async (accountId, apiToken, filterColumn, filterValue, start
 
 /**
  * Fetch call statistics using /calllogs API with hasConnected filter
- * Gets total calls, connected calls, and financial data
+ * Gets incoming calls, connected calls, and financial data
  */
 const getCallStats = async (accountId, apiToken, filterColumn, filterValue, startDate, endDate) => {
   console.log(`[Campaign Summary V2] Fetching call stats from /calllogs API...`);
   
-  // Fetch ALL calls (no hasConnected filter)
-  console.log(`[Campaign Summary V2] Fetching all calls...`);
+  // Fetch ALL incoming calls (no hasConnected filter)
+  // This represents all incoming calls regardless of connection status
+  console.log(`[Campaign Summary V2] Fetching all incoming calls...`);
   const allCallsResult = await getCallLogs(accountId, apiToken, filterColumn, filterValue, startDate, endDate, null);
   const allCalls = allCallsResult.calls;
-  const totalCalls = allCallsResult.totalCount;
+  const incomingCalls = allCallsResult.totalCount; // Total incoming calls
   
-  console.log(`[Campaign Summary V2] Total calls fetched: ${totalCalls}`);
+  console.log(`[Campaign Summary V2] ✅ Total Incoming Calls: ${incomingCalls}`);
   
   // Fetch CONNECTED calls only (hasConnected = "yes")
+  // These are calls that successfully connected to an agent/representative
   console.log(`[Campaign Summary V2] Fetching connected calls (hasConnected=yes)...`);
   const connectedResult = await getCallLogs(accountId, apiToken, filterColumn, filterValue, startDate, endDate, 'yes');
-  const connectedCalls = connectedResult.totalCount;
+  const connectedCalls = connectedResult.totalCount; // Calls that connected
   
-  console.log(`[Campaign Summary V2] Connected calls: ${connectedCalls}`);
+  console.log(`[Campaign Summary V2] ✅ Connected Calls: ${connectedCalls}`);
   
-  // Calculate financial totals from all calls
+  // Calculate calls that did NOT connect
+  const noConnections = incomingCalls - connectedCalls;
+  console.log(`[Campaign Summary V2] ✅ No Connections: ${noConnections}`);
+  
+  // Calculate connection rate
+  const connectionRate = incomingCalls > 0 ? ((connectedCalls / incomingCalls) * 100).toFixed(2) : 0;
+  console.log(`[Campaign Summary V2] ✅ Connection Rate: ${connectionRate}%`);
+  
+  // Calculate completed calls (calls with duration > 0 seconds)
+  // A completed call is one that has a duration, indicating it was not immediately hung up
+  let completedCalls = 0;
+  for (const call of allCalls) {
+    const duration = call.callDuration || 0;
+    if (duration > 0) {
+      completedCalls++;
+    }
+  }
+  
+  console.log(`[Campaign Summary V2] ✅ Completed Calls: ${completedCalls} (calls with duration > 0)`);
+  
+  // Calculate completion rate
+  const completionRate = incomingCalls > 0 ? ((completedCalls / incomingCalls) * 100).toFixed(2) : 0;
+  console.log(`[Campaign Summary V2] ✅ Completion Rate: ${completionRate}%`);
+  
+  // Calculate financial totals from all incoming calls
   let totalRevenue = 0;
   let totalPayout = 0;
   
@@ -229,14 +262,21 @@ const getCallStats = async (accountId, apiToken, filterColumn, filterValue, star
     totalPayout += call.payout;
   }
   
+  console.log(`[Campaign Summary V2] ✅ Total Revenue: $${totalRevenue.toFixed(2)}`);
+  console.log(`[Campaign Summary V2] ✅ Total Payout: $${totalPayout.toFixed(2)}`);
+  
   // Get campaign/target name from first call if available
   const campaignName = allCalls.length > 0 ? allCalls[0].campaignName : null;
   const targetName = allCalls.length > 0 ? allCalls[0].targetName : null;
   
   return {
-    totalCalls,
-    connectedCalls,
-    noConnections: totalCalls - connectedCalls,
+    incomingCalls,      // Total incoming calls (all calls received)
+    totalCalls: incomingCalls,  // Alias for backward compatibility
+    connectedCalls,     // Calls that successfully connected
+    completedCalls,     // Calls that were completed (duration > 0)
+    noConnections,      // Calls that did not connect
+    connectionRate: parseFloat(connectionRate),
+    completionRate: parseFloat(completionRate),
     totalRevenue,
     totalPayout,
     campaignName,
@@ -291,17 +331,30 @@ const fetchCampaignSummary = async (accountId, apiToken, identifier, identifierN
     console.log(`[Campaign Summary V2] Step 2: Fetching call stats from /calllogs API...`);
     const callStats = await getCallStats(accountId, apiToken, filterColumn, identifier, startDate, endDate);
     
-    const { totalCalls, connectedCalls, noConnections, totalRevenue, totalPayout } = callStats;
+    // Extract call statistics
+    const incomingCalls = callStats.incomingCalls;      // Total incoming calls
+    const connectedCalls = callStats.connectedCalls;     // Calls that connected
+    const completedCalls = callStats.completedCalls;    // Calls that were completed (duration > 0)
+    const noConnections = callStats.noConnections;       // Calls that didn't connect
+    const connectionRate = callStats.connectionRate;     // Connection rate percentage
+    const completionRate = callStats.completionRate;    // Completion rate percentage
+    const totalRevenue = callStats.totalRevenue;
+    const totalPayout = callStats.totalPayout;
     
     // Get campaign/target name from call data if available
     const campaignName = callStats.campaignName || identifierName || 'Unknown Campaign';
     const targetName = callStats.targetName || identifierName;
     
     // Calculate derived metrics
-    const rpc = totalCalls > 0 ? totalRevenue / totalCalls : 0;
-    const connectionRate = totalCalls > 0 ? (connectedCalls / totalCalls) * 100 : 0;
+    const rpc = incomingCalls > 0 ? totalRevenue / incomingCalls : 0;
     const profit = totalRevenue - totalPayout;
     const margin = totalRevenue > 0 ? (profit / totalRevenue) * 100 : 0;
+    
+    console.log(`[Campaign Summary V2] Step 2 Complete - Call Statistics:`);
+    console.log(`  📞 Incoming Calls: ${incomingCalls}`);
+    console.log(`  ✅ Connected Calls: ${connectedCalls} (${connectionRate.toFixed(2)}%)`);
+    console.log(`  ✔️  Completed Calls: ${completedCalls} (${completionRate.toFixed(2)}%)`);
+    console.log(`  ❌ No Connections: ${noConnections}`);
     
     const summary = {
       campaignName: campaignName,
@@ -309,61 +362,37 @@ const fetchCampaignSummary = async (accountId, apiToken, identifier, identifierN
       targetName: targetName,
       campaignId: useCampaignId ? identifier : null,
       summaryDate: dateStr,
-      totalCalls: totalCalls,                    // Total incoming calls (from /calllogs)
+      totalCalls: incomingCalls,                // Total incoming calls (all calls received)
       revenue: parseFloat(totalRevenue.toFixed(2)),
       payout: parseFloat(totalPayout.toFixed(2)),
       rpc: parseFloat(rpc.toFixed(2)),
       totalCallLengthSeconds: 0,                 // Not available without extended columns
-      averageCallLengthSeconds: 0,
       totalCost: parseFloat(totalCost.toFixed(2)), // From /insights API
       telco: parseFloat(totalCost.toFixed(2)),    // Telco is same as total_cost
       noConnections: noConnections,              // Calls that didn't connect (calculated)
       duplicates: 0,
-      blocked: 0,
-      ivrHandled: 0,
-      profit: parseFloat(profit.toFixed(2)),
       margin: parseFloat(margin.toFixed(2)),
       conversionRate: 0,
       // Connected calls from /calllogs API with hasConnected filter
       connectedCalls: connectedCalls,           // Connected calls (from hasConnected=yes)
       connectionRate: parseFloat(connectionRate.toFixed(2)),
-      totalTalkTime: 0,
-      averageTalkTime: 0,
-      totalWaitTime: 0,
-      averageWaitTime: 0,
-      totalHoldTime: 0,
-      averageHoldTime: 0,
-      totalTimeToAnswer: 0,
-      averageTimeToAnswer: 0,
-      totalPostCallDuration: 0,
-      averagePostCallDuration: 0,
-      callsWithRecordings: 0,
-      totalRecordingDuration: 0,
-      averageRecordingDuration: 0,
-      totalTransfers: 0,
-      averageTransfers: 0,
-      totalConferences: 0,
-      averageConferences: 0,
-      reroutedCalls: 0,
-      rootCalls: totalCalls,
-      averageQualityScore: null,
-      topStates: null,
-      topCities: null,
-      deviceTypeDistribution: null,
-      sourceDistribution: null,
-      mediumDistribution: null
+      // Completed calls (calls with duration > 0)
+      completedCalls: completedCalls,          // Completed calls (duration > 0 seconds)
+      completionRate: parseFloat(completionRate.toFixed(2)),
+      rootCalls: incomingCalls  // Root calls = total incoming calls
     };
     
     console.log(`[Campaign Summary V2] Calculated summary for ${targetName}:`);
-    console.log(`  - Total Calls (Incoming): ${summary.totalCalls}`);
-    console.log(`  - Connected Calls: ${summary.connectedCalls} (${summary.connectionRate.toFixed(1)}%)`);
-    console.log(`  - No Connections: ${summary.noConnections}`);
-    console.log(`  - Total Cost (Telco): $${summary.totalCost}`);
-    console.log(`  - Revenue: $${summary.revenue}`);
-    console.log(`  - Payout: $${summary.payout}`);
-    console.log(`  - RPC: $${summary.rpc}`);
-    console.log(`  - Profit: $${summary.profit}`);
-    console.log(`  - Margin: ${summary.margin.toFixed(1)}%`);
+    console.log(`  📞 Incoming Calls: ${summary.totalCalls} (total calls received)`);
+    console.log(`  ✅ Connected Calls: ${summary.connectedCalls} (${summary.connectionRate.toFixed(2)}% of incoming)`);
+    console.log(`  ✔️  Completed Calls: ${summary.completedCalls} (${summary.completionRate.toFixed(2)}% of incoming)`);
+    console.log(`  ❌ No Connections: ${summary.noConnections} (${summary.totalCalls > 0 ? ((summary.noConnections / summary.totalCalls) * 100).toFixed(2) : 0}% of incoming)`);
+    console.log(`  💰 Total Cost (Telco): $${summary.totalCost}`);
+    console.log(`  💵 Revenue: $${summary.revenue}`);
+    console.log(`  💸 Payout: $${summary.payout}`);
+    console.log(`  📈 RPC (Revenue Per Call): $${summary.rpc}`);
+    console.log(`  💎 Profit: $${profit.toFixed(2)}`);
+    console.log(`  📊 Margin: ${summary.margin.toFixed(2)}%`);
     
     return summary;
   } catch (error) {
@@ -412,32 +441,20 @@ const saveCampaignSummary = async (db, summary) => {
     if (hasExtendedColumns) {
       // Build column list and values based on whether telco exists
       const telcoColumn = hasTelco ? ', telco' : '';
-      const telcoValue = hasTelco ? ', $47' : '';
+      const telcoValue = hasTelco ? ', $19' : ''; // 18 params before telco (root_calls is $18)
       
-      // Full query with all extended columns
+      // Full query with essential columns only (unused columns removed)
       query = `
         INSERT INTO ringba_campaign_summary (
           campaign_name, campaign_id, target_id, target_name, summary_date,
           total_calls, revenue, payout, rpc,
-          total_call_length_seconds, average_call_length_seconds, total_cost,
-          no_connections, duplicates, blocked, ivr_handled,
-          profit, margin, conversion_rate,
+          total_call_length_seconds, total_cost,
+          no_connections, duplicates,
+          margin, conversion_rate,
           connected_calls, connection_rate,
-          total_talk_time, average_talk_time,
-          total_wait_time, average_wait_time,
-          total_hold_time, average_hold_time,
-          total_time_to_answer, average_time_to_answer,
-          total_post_call_duration, average_post_call_duration,
-          calls_with_recordings, total_recording_duration, average_recording_duration,
-          total_transfers, average_transfers,
-          total_conferences, average_conferences,
-          rerouted_calls, root_calls,
-          average_quality_score,
-          top_states, top_cities,
-          device_type_distribution, source_distribution, medium_distribution${telcoColumn}
+          root_calls${telcoColumn}
         ) VALUES (
-          $1, $2, $3, $4, $5, $6, $7, $8, $9, $10, $11, $12, $13, $14, $15, $16, $17, $18, $19,
-          $20, $21, $22, $23, $24, $25, $26, $27, $28, $29, $30, $31, $32, $33, $34, $35, $36, $37, $38, $39, $40, $41, $42, $43, $44, $45, $46${telcoValue}
+          $1, $2, $3, $4, $5, $6, $7, $8, $9, $10, $11, $12, $13, $14, $15, $16, $17, $18${telcoValue}
         )
         ON CONFLICT (campaign_name, summary_date)
         DO UPDATE SET
@@ -449,42 +466,14 @@ const saveCampaignSummary = async (db, summary) => {
           payout = EXCLUDED.payout,
           rpc = EXCLUDED.rpc,
           total_call_length_seconds = EXCLUDED.total_call_length_seconds,
-          average_call_length_seconds = EXCLUDED.average_call_length_seconds,
           total_cost = EXCLUDED.total_cost,
           no_connections = EXCLUDED.no_connections,
           duplicates = EXCLUDED.duplicates,
-          blocked = EXCLUDED.blocked,
-          ivr_handled = EXCLUDED.ivr_handled,
-          profit = EXCLUDED.profit,
           margin = EXCLUDED.margin,
           conversion_rate = EXCLUDED.conversion_rate,
           connected_calls = EXCLUDED.connected_calls,
           connection_rate = EXCLUDED.connection_rate,
-          total_talk_time = EXCLUDED.total_talk_time,
-          average_talk_time = EXCLUDED.average_talk_time,
-          total_wait_time = EXCLUDED.total_wait_time,
-          average_wait_time = EXCLUDED.average_wait_time,
-          total_hold_time = EXCLUDED.total_hold_time,
-          average_hold_time = EXCLUDED.average_hold_time,
-          total_time_to_answer = EXCLUDED.total_time_to_answer,
-          average_time_to_answer = EXCLUDED.average_time_to_answer,
-          total_post_call_duration = EXCLUDED.total_post_call_duration,
-          average_post_call_duration = EXCLUDED.average_post_call_duration,
-          calls_with_recordings = EXCLUDED.calls_with_recordings,
-          total_recording_duration = EXCLUDED.total_recording_duration,
-          average_recording_duration = EXCLUDED.average_recording_duration,
-          total_transfers = EXCLUDED.total_transfers,
-          average_transfers = EXCLUDED.average_transfers,
-          total_conferences = EXCLUDED.total_conferences,
-          average_conferences = EXCLUDED.average_conferences,
-          rerouted_calls = EXCLUDED.rerouted_calls,
-          root_calls = EXCLUDED.root_calls,
-          average_quality_score = EXCLUDED.average_quality_score,
-          top_states = EXCLUDED.top_states,
-          top_cities = EXCLUDED.top_cities,
-          device_type_distribution = EXCLUDED.device_type_distribution,
-          source_distribution = EXCLUDED.source_distribution,
-          medium_distribution = EXCLUDED.medium_distribution${hasTelco ? ',\n          telco = EXCLUDED.telco' : ''},
+          root_calls = EXCLUDED.root_calls${hasTelco ? ',\n          telco = EXCLUDED.telco' : ''},
           updated_at = CURRENT_TIMESTAMP
         RETURNING id
       `;
@@ -500,42 +489,14 @@ const saveCampaignSummary = async (db, summary) => {
         summary.payout,
         summary.rpc,
         summary.totalCallLengthSeconds,
-        summary.averageCallLengthSeconds,
         summary.totalCost,
         summary.noConnections,
         summary.duplicates,
-        summary.blocked,
-        summary.ivrHandled,
-        summary.profit,
         summary.margin,
         summary.conversionRate,
         summary.connectedCalls || 0,
         summary.connectionRate || 0,
-        summary.totalTalkTime || 0,
-        summary.averageTalkTime || 0,
-        summary.totalWaitTime || 0,
-        summary.averageWaitTime || 0,
-        summary.totalHoldTime || 0,
-        summary.averageHoldTime || 0,
-        summary.totalTimeToAnswer || 0,
-        summary.averageTimeToAnswer || 0,
-        summary.totalPostCallDuration || 0,
-        summary.averagePostCallDuration || 0,
-        summary.callsWithRecordings || 0,
-        summary.totalRecordingDuration || 0,
-        summary.averageRecordingDuration || 0,
-        summary.totalTransfers || 0,
-        summary.averageTransfers || 0,
-        summary.totalConferences || 0,
-        summary.averageConferences || 0,
-        summary.reroutedCalls || 0,
-        summary.rootCalls || 0,
-        summary.averageQualityScore || null,
-        summary.topStates || null,
-        summary.topCities || null,
-        summary.deviceTypeDistribution || null,
-        summary.sourceDistribution || null,
-        summary.mediumDistribution || null
+        summary.rootCalls || 0
       ];
       
       // Add telco if column exists
@@ -548,11 +509,11 @@ const saveCampaignSummary = async (db, summary) => {
         INSERT INTO ringba_campaign_summary (
           campaign_name, campaign_id, target_id, target_name, summary_date,
           total_calls, revenue, payout, rpc,
-          total_call_length_seconds, average_call_length_seconds, total_cost,
-          no_connections, duplicates, blocked, ivr_handled,
-          profit, margin, conversion_rate
+          total_call_length_seconds, total_cost,
+          no_connections, duplicates,
+          margin, conversion_rate
         ) VALUES (
-          $1, $2, $3, $4, $5, $6, $7, $8, $9, $10, $11, $12, $13, $14, $15, $16, $17, $18, $19
+          $1, $2, $3, $4, $5, $6, $7, $8, $9, $10, $11, $12, $13, $14, $15
         )
         ON CONFLICT (campaign_name, summary_date)
         DO UPDATE SET
@@ -564,13 +525,9 @@ const saveCampaignSummary = async (db, summary) => {
           payout = EXCLUDED.payout,
           rpc = EXCLUDED.rpc,
           total_call_length_seconds = EXCLUDED.total_call_length_seconds,
-          average_call_length_seconds = EXCLUDED.average_call_length_seconds,
           total_cost = EXCLUDED.total_cost,
           no_connections = EXCLUDED.no_connections,
           duplicates = EXCLUDED.duplicates,
-          blocked = EXCLUDED.blocked,
-          ivr_handled = EXCLUDED.ivr_handled,
-          profit = EXCLUDED.profit,
           margin = EXCLUDED.margin,
           conversion_rate = EXCLUDED.conversion_rate,
           updated_at = CURRENT_TIMESTAMP
@@ -588,13 +545,9 @@ const saveCampaignSummary = async (db, summary) => {
         summary.payout,
         summary.rpc,
         summary.totalCallLengthSeconds,
-        summary.averageCallLengthSeconds,
         summary.totalCost,
         summary.noConnections,
         summary.duplicates,
-        summary.blocked,
-        summary.ivrHandled,
-        summary.profit,
         summary.margin,
         summary.conversionRate
       ];
@@ -686,14 +639,18 @@ export const syncCampaignSummaryByCampaignId = async (config, campaignId, date =
     console.log(`Campaign ID: ${campaignId}`);
     console.log(`Campaign Name: ${summary.campaignName}`);
     console.log(`Date: ${targetDate.toISOString().split('T')[0]}`);
-    console.log(`Total Calls: ${summary.totalCalls}`);
-    console.log(`Total Cost: $${summary.totalCost}`);
-    console.log(`Revenue: $${summary.revenue}`);
-    console.log(`Payout: $${summary.payout}`);
-    console.log(`RPC: $${summary.rpc}`);
-    console.log(`Profit: $${summary.profit}`);
-    console.log(`Margin: ${summary.margin}%`);
-    console.log(`Conversion Rate: ${summary.conversionRate}%`);
+    console.log(`📞 Incoming Calls: ${summary.totalCalls}`);
+    console.log(`✅ Connected Calls: ${summary.connectedCalls} (${summary.connectionRate.toFixed(2)}%)`);
+    console.log(`✔️  Completed Calls: ${summary.completedCalls} (${summary.completionRate.toFixed(2)}%)`);
+    console.log(`❌ No Connections: ${summary.noConnections}`);
+    console.log(`💰 Total Cost (Telco): $${summary.totalCost}`);
+    console.log(`💵 Revenue: $${summary.revenue}`);
+    console.log(`💸 Payout: $${summary.payout}`);
+    console.log(`📈 RPC: $${summary.rpc}`);
+    const calculatedProfit = summary.revenue - summary.payout;
+    console.log(`💎 Profit: $${calculatedProfit.toFixed(2)}`);
+    console.log(`📊 Margin: ${summary.margin.toFixed(2)}%`);
+    console.log(`🔄 Conversion Rate: ${summary.conversionRate}%`);
     console.log('='.repeat(70));
     console.log('');
     
@@ -809,7 +766,11 @@ export const syncCampaignSummary = async (config, date = null) => {
   if (results.length > 0) {
     console.log('\nSuccessful syncs:');
     results.forEach(r => {
-      console.log(`  - ${r.targetName}: ${r.summary.totalCalls} calls, Total Cost: $${r.summary.totalCost}, RPC: $${r.summary.rpc}, Revenue: $${r.summary.revenue}`);
+      console.log(`  - ${r.targetName}:`);
+      console.log(`    📞 Incoming Calls: ${r.summary.totalCalls}`);
+      console.log(`    ✅ Connected Calls: ${r.summary.connectedCalls} (${r.summary.connectionRate.toFixed(2)}%)`);
+      console.log(`    ✔️  Completed Calls: ${r.summary.completedCalls} (${r.summary.completionRate.toFixed(2)}%)`);
+      console.log(`    💰 Total Cost: $${r.summary.totalCost}, RPC: $${r.summary.rpc}, Revenue: $${r.summary.revenue}`);
     });
   }
   

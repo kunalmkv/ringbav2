@@ -349,6 +349,97 @@ const fetchPayoutComparisonData = async (startDate = null, endDate = null) => {
   }
 };
 
+// Function to fetch Ringba Campaign Summary data
+const fetchRingbaCampaignSummary = async (startDate = null, endDate = null, campaignName = null) => {
+  let client = null;
+  try {
+    console.log('[DB Query] Fetching ringba_campaign_summary data...', { startDate, endDate, campaignName });
+    
+    client = await pool.connect();
+    console.log('[DB Query] Database client acquired');
+    
+    // Check which columns exist in the table
+    const columnCheckQuery = `
+      SELECT column_name 
+      FROM information_schema.columns 
+      WHERE table_name = 'ringba_campaign_summary'
+      ORDER BY ordinal_position
+    `;
+    const columnResult = await client.query(columnCheckQuery);
+    const existingColumns = columnResult.rows.map(row => row.column_name);
+    console.log('[DB Query] Existing columns:', existingColumns);
+    
+    // Base columns that should always exist
+    const baseColumns = [
+      'id', 'campaign_name', 'campaign_id', 'target_id', 'target_name',
+      'summary_date', 'total_calls', 'revenue', 'payout', 'rpc',
+      'total_call_length_seconds', 'total_cost', 'no_connections',
+      'duplicates', 'margin', 'conversion_rate', 'created_at', 'updated_at'
+    ];
+    
+    // Optional columns that may not exist
+    const optionalColumns = [
+      'insights_total_cost', 'telco', 'google_ads_spend', 'google_ads_notes',
+      'connected_calls', 'connection_rate', 'completed_calls', 'completion_rate',
+      'root_calls'
+    ];
+    
+    // Build column list - include base columns and optional columns if they exist
+    const columnsToSelect = [
+      ...baseColumns.filter(col => existingColumns.includes(col)),
+      ...optionalColumns.filter(col => existingColumns.includes(col))
+    ];
+    
+    console.log('[DB Query] Columns to select:', columnsToSelect);
+    
+    // Build query with filters
+    let query = `
+      SELECT ${columnsToSelect.join(', ')}
+      FROM ringba_campaign_summary
+      WHERE 1=1
+    `;
+    
+    const params = [];
+    let paramIndex = 1;
+    
+    if (startDate) {
+      query += ` AND summary_date >= $${paramIndex}`;
+      params.push(startDate);
+      paramIndex++;
+    }
+    
+    if (endDate) {
+      query += ` AND summary_date <= $${paramIndex}`;
+      params.push(endDate);
+      paramIndex++;
+    }
+    
+    if (campaignName) {
+      query += ` AND campaign_name = $${paramIndex}`;
+      params.push(campaignName);
+      paramIndex++;
+    }
+    
+    query += ` ORDER BY summary_date DESC, campaign_name ASC`;
+    
+    console.log('[DB Query] Executing query:', query);
+    console.log('[DB Query] With params:', params);
+    
+    const result = await client.query(query, params);
+    console.log('[DB Query] Query executed successfully, rows:', result.rows.length);
+    
+    return result.rows;
+  } catch (error) {
+    console.error('[DB Query] Error fetching ringba_campaign_summary:', error);
+    throw error;
+  } finally {
+    if (client) {
+      client.release();
+      console.log('[DB Query] Database client released');
+    }
+  }
+};
+
 // API endpoint: Get payout comparison data
 app.get('/api/payout-comparison', async (req, res) => {
   try {
@@ -371,6 +462,33 @@ app.get('/api/payout-comparison', async (req, res) => {
     sendJSON(res, response);
   } catch (error) {
     console.error('[API Error] Failed to fetch payout comparison:', error);
+    console.error('[API Error] Stack:', error.stack);
+    sendError(res, `Failed to fetch data: ${error.message}`, 500);
+  }
+});
+
+// API endpoint: Get Ringba Campaign Summary data
+app.get('/api/ringba-campaign-summary', async (req, res) => {
+  try {
+    const { startDate, endDate, campaignName } = req.query;
+    console.log('[API] /api/ringba-campaign-summary called', { startDate, endDate, campaignName });
+    
+    const data = await fetchRingbaCampaignSummary(startDate || null, endDate || null, campaignName || null);
+    
+    const response = {
+      data: data,
+      total: data.length
+    };
+    
+    console.log('[API] Sending response:', {
+      dataLength: response.data.length,
+      total: response.total,
+      firstRecord: response.data[0] || null
+    });
+    
+    sendJSON(res, response);
+  } catch (error) {
+    console.error('[API Error] Failed to fetch ringba campaign summary:', error);
     console.error('[API Error] Stack:', error.stack);
     sendError(res, `Failed to fetch data: ${error.message}`, 500);
   }

@@ -136,6 +136,14 @@ export const api = {
     return fetchAPI(`/api/google-ads-spend/${date}`, {
       method: 'DELETE'
     });
+  },
+  // Ringba Campaign Summary endpoint
+  getRingbaCampaignSummary: (startDate = null, endDate = null, campaignName = null) => {
+    const params = new URLSearchParams();
+    if (startDate) params.append('startDate', startDate);
+    if (endDate) params.append('endDate', endDate);
+    if (campaignName) params.append('campaignName', campaignName);
+    return fetchAPI(`/api/ringba-campaign-summary?${params.toString()}`);
   }
 };
 

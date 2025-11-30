@@ -1536,3 +1536,253 @@ body {
     }
 }
 
+/* Ringba Dashboard Table */
+.ringba-dashboard-section {
+    margin-bottom: 2rem;
+}
+
+.ringba-dashboard-section .table-container {
+    overflow-x: auto;
+    overflow-y: visible;
+    -webkit-overflow-scrolling: touch;
+    width: 100%;
+    max-width: 100%;
+    position: relative;
+    margin-top: 1rem;
+    border-radius: 0.5rem;
+}
+
+.ringba-dashboard-section .table-container::-webkit-scrollbar {
+    height: 8px;
+}
+
+.ringba-dashboard-section .table-container::-webkit-scrollbar-track {
+    background: var(--bg-color);
+    border-radius: 4px;
+}
+
+.ringba-dashboard-section .table-container::-webkit-scrollbar-thumb {
+    background: var(--secondary-color);
+    border-radius: 4px;
+}
+
+.ringba-dashboard-section .table-container::-webkit-scrollbar-thumb:hover {
+    background: var(--primary-color);
+}
+
+.ringba-dashboard-table {
+    width: 100%;
+    min-width: 1600px; /* Minimum width to accommodate all columns */
+    border-collapse: collapse;
+    background-color: var(--card-bg);
+    border-radius: 0.5rem;
+    overflow: hidden;
+    box-shadow: var(--shadow);
+    font-size: 0.8rem;
+    table-layout: fixed; /* Fixed layout for consistent column widths */
+}
+
+.ringba-dashboard-table thead {
+    background: linear-gradient(135deg, var(--primary-color) 0%, #1e40af 100%);
+    color: white;
+}
+
+.ringba-dashboard-table th {
+    padding: 0.5rem 0.4rem;
+    text-align: center;
+    font-weight: 600;
+    border: 1px solid rgba(255, 255, 255, 0.2);
+    white-space: nowrap;
+    font-size: 0.7rem;
+    position: sticky;
+    top: 0;
+    z-index: 10;
+    background: linear-gradient(135deg, var(--primary-color) 0%, #1e40af 100%);
+}
+
+.ringba-dashboard-table th.col-date {
+    position: sticky;
+    left: 0;
+    z-index: 11;
+    min-width: 100px;
+    width: 100px;
+}
+
+.ringba-dashboard-table th.col-text {
+    min-width: 120px;
+    width: 120px;
+}
+
+.ringba-dashboard-table th.col-number {
+    min-width: 90px;
+    width: 90px;
+}
+
+.ringba-dashboard-table th.col-currency {
+    min-width: 100px;
+    width: 100px;
+}
+
+.ringba-dashboard-table th.col-percentage {
+    min-width: 90px;
+    width: 90px;
+}
+
+.ringba-dashboard-table th.col-duration {
+    min-width: 100px;
+    width: 100px;
+}
+
+.ringba-dashboard-table tbody tr {
+    border-bottom: 1px solid var(--border-color);
+    transition: background-color 0.2s;
+}
+
+.ringba-dashboard-table tbody tr:hover {
+    background-color: var(--bg-color);
+}
+
+.ringba-dashboard-table td {
+    padding: 0.5rem 0.4rem;
+    text-align: center;
+    border-right: 1px solid var(--border-color);
+    white-space: nowrap;
+    overflow: hidden;
+    text-overflow: ellipsis;
+}
+
+.ringba-dashboard-table td.col-date {
+    text-align: left;
+    padding-left: 0.75rem;
+    padding-right: 0.75rem;
+    font-weight: 500;
+    background-color: var(--bg-color);
+    position: sticky;
+    left: 0;
+    z-index: 5;
+    width: 100px;
+    box-shadow: 2px 0 4px rgba(0, 0, 0, 0.1);
+}
+
+.ringba-dashboard-table tbody tr:hover td.col-date {
+    background-color: var(--bg-color);
+}
+
+.ringba-dashboard-table td.col-text {
+    text-align: left;
+    padding-left: 0.5rem;
+    padding-right: 0.5rem;
+    width: 120px;
+    overflow: hidden;
+    text-overflow: ellipsis;
+}
+
+.ringba-dashboard-table td.col-number {
+    font-family: 'Courier New', monospace;
+    font-weight: 500;
+    text-align: right;
+    padding-right: 0.75rem;
+    padding-left: 0.5rem;
+    width: 90px;
+}
+
+.ringba-dashboard-table td.col-currency {
+    font-family: 'Courier New', monospace;
+    font-weight: 500;
+    text-align: right;
+    padding-right: 0.75rem;
+    padding-left: 0.5rem;
+    width: 100px;
+}
+
+.ringba-dashboard-table td.col-percentage {
+    font-family: 'Courier New', monospace;
+    font-weight: 500;
+    text-align: right;
+    padding-right: 0.75rem;
+    padding-left: 0.5rem;
+    width: 90px;
+}
+
+.ringba-dashboard-table td.col-duration {
+    font-family: 'Courier New', monospace;
+    font-weight: 500;
+    text-align: center;
+    width: 100px;
+}
+
+.ringba-dashboard-table td.no-data {
+    text-align: center;
+    padding: 2rem;
+    color: var(--text-secondary);
+    font-style: italic;
+}
+
+.campaign-select {
+    padding: 0.5rem;
+    border: 1px solid var(--border-color);
+    border-radius: 0.375rem;
+    font-size: 0.875rem;
+    background-color: var(--card-bg);
+    color: var(--text-primary);
+    cursor: pointer;
+}
+
+.campaign-select:hover {
+    border-color: var(--primary-color);
+}
+
+.campaign-select:focus {
+    outline: none;
+    border-color: var(--primary-color);
+    box-shadow: 0 0 0 3px rgba(37, 99, 235, 0.1);
+}
+
+/* Responsive Ringba Dashboard Table */
+@media (max-width: 1200px) {
+    .ringba-dashboard-table {
+        min-width: 1800px; /* Keep minimum width for all columns */
+    }
+    
+    .ringba-dashboard-table th {
+        font-size: 0.7rem;
+        padding: 0.4rem 0.3rem;
+    }
+    
+    .ringba-dashboard-table td {
+        font-size: 0.75rem;
+        padding: 0.4rem 0.3rem;
+    }
+}
+
+@media (max-width: 768px) {
+    .ringba-dashboard-section .table-container {
+        margin: 0 -1rem; /* Extend to edges on mobile */
+    }
+    
+    .ringba-dashboard-table {
+        font-size: 0.7rem;
+        min-width: 1800px; /* Keep minimum width */
+    }
+    
+    .ringba-dashboard-table th {
+        font-size: 0.65rem;
+        padding: 0.35rem 0.25rem;
+    }
+    
+    .ringba-dashboard-table td {
+        font-size: 0.7rem;
+        padding: 0.35rem 0.25rem;
+    }
+    
+    .ringba-dashboard-table td.col-date {
+        padding-left: 0.5rem;
+        padding-right: 0.5rem;
+    }
+    
+    .campaign-select {
+        width: 100%;
+        margin-top: 0.5rem;
+    }
+}
+
