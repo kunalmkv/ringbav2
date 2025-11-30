@@ -4,7 +4,7 @@ import react from '@vitejs/plugin-react';
 export default defineConfig({
   plugins: [react()],
   // Set base path to match nginx location - this ensures all assets load correctly
-  base: '/ringba-sync-dashboard/',
+  base: '/',
   build: {
     outDir: '../dashboard-build',
     emptyOutDir: true
