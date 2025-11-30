@@ -79,11 +79,111 @@ const sendError = (res, message, statusCode = 500) => {
   sendJSON(res, { error: message }, statusCode);
 };
 
-// Simple function to fetch payout comparison data directly from database
+// Function to fetch payout comparison data from pre-calculated table
 const fetchPayoutComparisonData = async (startDate = null, endDate = null) => {
   let client = null;
   try {
-    console.log('[DB Query] Fetching payout comparison data...', { startDate, endDate });
+    console.log('[DB Query] Fetching payout comparison data from payout_comparison_daily table...', { startDate, endDate });
+    
+    // Get a client from the pool
+    client = await pool.connect();
+    console.log('[DB Query] Database client acquired');
+    
+    // Build date filter
+    let dateFilter = '';
+    const params = [];
+    
+    if (startDate && endDate) {
+      dateFilter = `WHERE comparison_date >= $1 AND comparison_date <= $2`;
+      params.push(startDate, endDate);
+    } else if (startDate) {
+      dateFilter = `WHERE comparison_date >= $1`;
+      params.push(startDate);
+    } else if (endDate) {
+      dateFilter = `WHERE comparison_date <= $1`;
+      params.push(endDate);
+    }
+    
+    // Query from pre-calculated table
+    const query = `
+      SELECT 
+        comparison_date::text as date,
+        ringba_static,
+        ringba_api,
+        ringba_total,
+        elocal_static,
+        elocal_api,
+        elocal_total,
+        adjustments,
+        adjustment_static_pct,
+        adjustment_api_pct,
+        adjustment_pct,
+        total_calls,
+        rpc,
+        google_ads_spend,
+        google_ads_notes,
+        telco,
+        cost_per_call,
+        net,
+        net_profit
+      FROM payout_comparison_daily
+      ${dateFilter}
+      ORDER BY comparison_date DESC
+    `;
+    
+    console.log('[DB Query] Executing query:', query);
+    console.log('[DB Query] With params:', params);
+    
+    const result = await client.query(query, params);
+    console.log(`[DB Query] Query returned ${result.rows.length} rows`);
+    
+    // Map database columns to frontend expected format
+    const processedData = result.rows.map(row => ({
+      date: row.date,
+      ringba_static: parseFloat(row.ringba_static) || 0,
+      ringba_api: parseFloat(row.ringba_api) || 0,
+      ringba_total: parseFloat(row.ringba_total) || 0,
+      elocal_static: parseFloat(row.elocal_static) || 0,
+      elocal_api: parseFloat(row.elocal_api) || 0,
+      elocal_total: parseFloat(row.elocal_total) || 0,
+      adjustments: parseFloat(row.adjustments) || 0,
+      adjustment_static_pct: parseFloat(row.adjustment_static_pct) || 0,
+      adjustment_api_pct: parseFloat(row.adjustment_api_pct) || 0,
+      adjustment_pct: parseFloat(row.adjustment_pct) || 0,
+      total_calls: parseInt(row.total_calls) || 0,
+      rpc: parseFloat(row.rpc) || 0,
+      google_ads_spend: parseFloat(row.google_ads_spend) || 0,
+      google_ads_notes: row.google_ads_notes || null,
+      telco: parseFloat(row.telco) || 0,
+      cost_per_call: parseFloat(row.cost_per_call) || 0,
+      net: parseFloat(row.net) || 0,
+      net_profit: parseFloat(row.net_profit) || 0
+    }));
+    
+    console.log(`[DB Query] Processed ${processedData.length} records`);
+    if (processedData.length > 0) {
+      console.log('[DB Query] Sample record:', JSON.stringify(processedData[0], null, 2));
+    }
+    
+    return processedData;
+  } catch (error) {
+    console.error('[DB Query Error]:', error);
+    console.error('[DB Query Error] Stack:', error.stack);
+    throw error;
+  } finally {
+    // Always release the client back to the pool
+    if (client) {
+      client.release();
+      console.log('[DB Query] Database client released');
+    }
+  }
+};
+
+// Legacy function kept for reference (now replaced by fetchPayoutComparisonData above)
+const fetchPayoutComparisonDataLegacy = async (startDate = null, endDate = null) => {
+  let client = null;
+  try {
+    console.log('[DB Query] Fetching payout comparison data (legacy method)...', { startDate, endDate });
     
     // Get a client from the pool
     client = await pool.connect();
@@ -630,7 +730,7 @@ app.get('/api/google-ads-spend', async (req, res) => {
 });
 
 // POST/PUT: Add or update Google Ads spend for a specific date
-// Updates the "Appliance Repair" combined summary record for that date
+// Updates both ringba_campaign_summary and payout_comparison_daily tables
 app.post('/api/google-ads-spend', async (req, res) => {
   let client = null;
   try {
@@ -652,6 +752,7 @@ app.post('/api/google-ads-spend', async (req, res) => {
     
     client = await pool.connect();
     
+    // Update ringba_campaign_summary table
     // Check if "Appliance Repair" summary exists for this date
     const checkQuery = `SELECT id FROM ringba_campaign_summary WHERE campaign_name = 'Appliance Repair' AND summary_date = $1`;
     const checkResult = await client.query(checkQuery, [date]);
@@ -667,13 +768,7 @@ app.post('/api/google-ads-spend', async (req, res) => {
       `;
       const insertResult = await client.query(insertQuery, [date, spendAmount, notes || null]);
       
-      console.log('[API] Google Ads spend saved (new record):', insertResult.rows[0]);
-      
-      sendJSON(res, {
-        success: true,
-        data: insertResult.rows[0],
-        message: 'Google Ads spend saved successfully'
-      });
+      console.log('[API] Google Ads spend saved (new record in ringba_campaign_summary):', insertResult.rows[0]);
     } else {
       // Update existing record
       const updateQuery = `
@@ -687,14 +782,62 @@ app.post('/api/google-ads-spend', async (req, res) => {
       
       const updateResult = await client.query(updateQuery, [spendAmount, notes || null, date]);
       
-      console.log('[API] Google Ads spend updated:', updateResult.rows[0]);
-      
-      sendJSON(res, {
-        success: true,
-        data: updateResult.rows[0],
-        message: 'Google Ads spend updated successfully'
-      });
+      console.log('[API] Google Ads spend updated (ringba_campaign_summary):', updateResult.rows[0]);
     }
+    
+    // Update payout_comparison_daily table
+    // Get current row data to recalculate metrics
+    const getRowQuery = `
+      SELECT 
+        elocal_total,
+        telco,
+        total_calls
+      FROM payout_comparison_daily
+      WHERE comparison_date = $1
+    `;
+    
+    const rowResult = await client.query(getRowQuery, [date]);
+    
+    if (rowResult.rows.length > 0) {
+      const row = rowResult.rows[0];
+      const elocalTotal = parseFloat(row.elocal_total) || 0;
+      const telco = parseFloat(row.telco) || 0;
+      const totalCalls = parseInt(row.total_calls) || 0;
+      
+      // Recalculate cost_per_call, net, and net_profit
+      const costPerCall = totalCalls > 0 ? spendAmount / totalCalls : 0;
+      const net = elocalTotal - spendAmount - telco;
+      const netProfit = elocalTotal > 0 ? (net / elocalTotal) * 100 : 0;
+      
+      // Update the payout_comparison_daily row
+      const updatePayoutQuery = `
+        UPDATE payout_comparison_daily
+        SET
+          google_ads_spend = $1,
+          google_ads_notes = $2,
+          cost_per_call = $3,
+          net = $4,
+          net_profit = $5,
+          updated_at = CURRENT_TIMESTAMP
+        WHERE comparison_date = $6
+      `;
+      
+      await client.query(updatePayoutQuery, [spendAmount, notes || null, costPerCall, net, netProfit, date]);
+      
+      console.log('[API] Google Ads spend updated (payout_comparison_daily)');
+    } else {
+      console.log('[API] Warning: No payout_comparison_daily record found for date', date, '- skipping update');
+    }
+    
+    sendJSON(res, {
+      success: true,
+      data: {
+        date,
+        spend_amount: spendAmount,
+        notes: notes || null
+      },
+      message: 'Google Ads spend saved successfully'
+    });
   } catch (error) {
     console.error('[API Error] Failed to save Google Ads spend:', error);
     sendError(res, `Failed to save data: ${error.message}`, 500);

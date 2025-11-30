@@ -261,20 +261,14 @@ const PayoutComparison = () => {
               data.map((row, index) => {
                 console.log(`[PayoutComparison] Rendering row ${index}:`, row.date);
                 
-                // Calculate the three new metrics
+                // All values are now pre-calculated from the database
+                // No need to calculate anything in the frontend
                 const rawCalls = row.total_calls || 0;
                 const googleAdsSpend = parseFloat(row.google_ads_spend) || 0;
                 const telco = parseFloat(row.telco) || 0;
-                const elocalTotal = parseFloat(row.elocal_total) || 0;
-                
-                // i) Cost per call = Google Ads Spend / Raw Call
-                const costPerCall = rawCalls > 0 ? googleAdsSpend / rawCalls : 0;
-                
-                // ii) Net = Elocal Total - Google Ads Spend - Telco
-                const net = elocalTotal - googleAdsSpend - telco;
-                
-                // iii) Net Profit = Net / Elocal Total (as percentage)
-                const netProfit = elocalTotal > 0 ? (net / elocalTotal) * 100 : 0;
+                const costPerCall = parseFloat(row.cost_per_call) || 0;
+                const net = parseFloat(row.net) || 0;
+                const netProfit = parseFloat(row.net_profit) || 0;
                 
                 return (
                   <tr key={`${row.date}-${index}`} className={getRowClass(row.adjustments)}>

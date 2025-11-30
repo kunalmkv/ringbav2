@@ -1,6 +1,6 @@
 import React from 'react';
 
-const Header = ({ status, statusType, onRefresh, lastUpdated }) => {
+const Header = ({ status, statusType, onRefresh, lastUpdated, currentPage, onPageChange }) => {
   const getStatusDotClass = () => {
     if (statusType === 'healthy') return 'healthy';
     if (statusType === 'error') return 'error';
@@ -21,6 +21,22 @@ const Header = ({ status, statusType, onRefresh, lastUpdated }) => {
           </div>
         </div>
       </div>
+      
+      {/* Navigation Tabs */}
+      <nav className="dashboard-nav">
+        <button 
+          className={`nav-tab ${currentPage === 'dashboard' ? 'active' : ''}`}
+          onClick={() => onPageChange('dashboard')}
+        >
+          📊 Dashboard
+        </button>
+        <button 
+          className={`nav-tab ${currentPage === 'analysis' ? 'active' : ''}`}
+          onClick={() => onPageChange('analysis')}
+        >
+          📈 Data Analysis
+        </button>
+      </nav>
     </header>
   );
 };

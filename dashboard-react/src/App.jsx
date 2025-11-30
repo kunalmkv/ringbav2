@@ -1,4 +1,4 @@
-import React from 'react';
+import React, { useState } from 'react';
 import { useDashboardData } from './hooks/useDashboardData';
 import Header from './components/Header';
 import HealthStatus from './components/HealthStatus';
@@ -9,9 +9,12 @@ import RecentActivity from './components/RecentActivity';
 import ChargebackTracker from './components/ChargebackTracker';
 import PayoutComparison from './components/PayoutComparison';
 import RingbaDashboard from './components/RingbaDashboard';
+import DataAnalysis from './components/DataAnalysis';
 import Footer from './components/Footer';
 
 function App() {
+  const [currentPage, setCurrentPage] = useState('dashboard');
+  
   const {
     health,
     stats,
@@ -38,6 +41,10 @@ function App() {
     loadHistory(service || null, limit);
   };
 
+  const handlePageChange = (page) => {
+    setCurrentPage(page);
+  };
+
   return (
     <div className="dashboard-container">
       <Header
@@ -45,17 +52,27 @@ function App() {
         statusType={statusInfo.type}
         onRefresh={loadAllData}
         lastUpdated={lastUpdated}
+        currentPage={currentPage}
+        onPageChange={handlePageChange}
       />
 
       <main className="dashboard-main">
-        <HealthStatus health={health} />
-        <Statistics stats={stats} />
-        <RingbaStatus stats={stats} />
-        <PayoutComparison />
-        <RingbaDashboard />
-        <ChargebackTracker chargebackData={chargeback} loading={loading} />
-        <ServiceHistory history={history} onFilterChange={handleHistoryFilter} />
-        <RecentActivity activity={activity} />
+        {currentPage === 'dashboard' && (
+          <>
+            <HealthStatus health={health} />
+            <Statistics stats={stats} />
+            <RingbaStatus stats={stats} />
+            <PayoutComparison />
+            <RingbaDashboard />
+            <ChargebackTracker chargebackData={chargeback} loading={loading} />
+            <ServiceHistory history={history} onFilterChange={handleHistoryFilter} />
+            <RecentActivity activity={activity} />
+          </>
+        )}
+        
+        {currentPage === 'analysis' && (
+          <DataAnalysis />
+        )}
       </main>
 
       <Footer lastUpdated={lastUpdated} />
