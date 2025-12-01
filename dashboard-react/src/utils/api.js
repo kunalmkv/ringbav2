@@ -146,6 +146,13 @@ export const api = {
     if (endDate) params.append('endDate', endDate);
     if (campaignName) params.append('campaignName', campaignName);
     return fetchAPI(`/api/ringba-campaign-summary?${params.toString()}`);
+  },
+  // Calls Metrics endpoint - tracks total calls, completed calls, connected calls, and chargebacks per day
+  getCallsMetrics: (startDate = null, endDate = null) => {
+    const params = new URLSearchParams();
+    if (startDate) params.append('startDate', startDate);
+    if (endDate) params.append('endDate', endDate);
+    return fetchAPI(`/api/calls-metrics?${params.toString()}`);
   }
 };
 

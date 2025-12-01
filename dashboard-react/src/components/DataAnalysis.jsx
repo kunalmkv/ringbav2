@@ -2,11 +2,15 @@ import React, { useState, useEffect } from 'react';
 import { api } from '../utils/api';
 import AdjustmentsChart from './AdjustmentsChart';
 import DailyRevenueChart from './DailyRevenueChart';
+import CallsMetricsChart from './CallsMetricsChart';
 
 const DataAnalysis = () => {
   const [data, setData] = useState([]);
+  const [callsMetricsData, setCallsMetricsData] = useState([]);
   const [loading, setLoading] = useState(true);
+  const [callsMetricsLoading, setCallsMetricsLoading] = useState(true);
   const [error, setError] = useState(null);
+  const [callsMetricsError, setCallsMetricsError] = useState(null);
   const [startDate, setStartDate] = useState('');
   const [endDate, setEndDate] = useState('');
 
@@ -27,7 +31,7 @@ const DataAnalysis = () => {
     setStartDate(formatDate(fifteenDaysAgo));
   }, []);
 
-  // Fetch data
+  // Fetch payout comparison data
   const fetchData = async () => {
     if (!startDate || !endDate) {
       console.log('[DataAnalysis] Skipping fetch - dates not set:', { startDate, endDate });
@@ -38,7 +42,7 @@ const DataAnalysis = () => {
     setLoading(true);
     setError(null);
     try {
-      console.log('[DataAnalysis] Fetching data...', { startDate, endDate });
+      console.log('[DataAnalysis] Fetching payout comparison data...', { startDate, endDate });
       
       const result = await api.payoutComparison(startDate || null, endDate || null);
       
@@ -73,18 +77,67 @@ const DataAnalysis = () => {
     }
   };
 
+  // Fetch calls metrics data
+  const fetchCallsMetricsData = async () => {
+    if (!startDate || !endDate) {
+      console.log('[DataAnalysis] Skipping calls metrics fetch - dates not set:', { startDate, endDate });
+      setCallsMetricsLoading(false);
+      return;
+    }
+
+    setCallsMetricsLoading(true);
+    setCallsMetricsError(null);
+    try {
+      console.log('[DataAnalysis] Fetching calls metrics data...', { startDate, endDate });
+      
+      const result = await api.getCallsMetrics(startDate || null, endDate || null);
+      
+      console.log('[DataAnalysis] Calls Metrics API Response:', result);
+      
+      if (!result) {
+        setCallsMetricsError('No data returned from API');
+        setCallsMetricsData([]);
+        return;
+      }
+      
+      const dataArray = result?.data || [];
+      console.log('[DataAnalysis] Calls Metrics Data Array Length:', dataArray.length);
+      
+      if (dataArray.length > 0) {
+        // Ensure each row has a date field for charts
+        const processedData = dataArray.map(row => ({
+          ...row,
+          date: row.date || row.comparison_date || null
+        }));
+        setCallsMetricsData(processedData);
+        console.log('[DataAnalysis] Sample calls metrics data:', processedData[0]);
+      } else {
+        setCallsMetricsData([]);
+      }
+    } catch (err) {
+      console.error('[DataAnalysis] Calls Metrics Error:', err);
+      setCallsMetricsError(err.message || 'Failed to fetch calls metrics data');
+      setCallsMetricsData([]);
+    } finally {
+      setCallsMetricsLoading(false);
+    }
+  };
+
   useEffect(() => {
     if (startDate && endDate) {
       fetchData();
+      fetchCallsMetricsData();
     } else {
       // If dates aren't set yet, stop loading
       setLoading(false);
+      setCallsMetricsLoading(false);
     }
   }, [startDate, endDate]); // Run when dates are set
 
   const handleDateFilter = () => {
     if (startDate && endDate) {
       fetchData();
+      fetchCallsMetricsData();
     } else {
       setError('Please select both start and end dates');
     }
@@ -92,6 +145,7 @@ const DataAnalysis = () => {
 
   const handleRefresh = () => {
     fetchData();
+    fetchCallsMetricsData();
   };
 
   // Format date for display
@@ -195,6 +249,33 @@ const DataAnalysis = () => {
               <div className="loading">Loading chart...</div>
             ) : (
               <DailyRevenueChart data={data} showLast15Days={data.length > 15} />
+            )}
+          </div>
+
+          {/* Calls Metrics Chart */}
+          <div className="chart-section chart-wide">
+            <h3>
+              Daily Calls Metrics
+              {callsMetricsData.length <= 15 ? ` (${callsMetricsData.length} Days)` : ' (Last 15 Days)'}
+            </h3>
+            <p className="chart-description">
+              Tracks daily call metrics: 
+              <span style={{color: '#3b82f6'}}> Total Calls</span>, 
+              <span style={{color: '#10b981'}}> Connected Calls</span>, 
+              <span style={{color: '#f59e0b'}}> Completed Calls</span>, and 
+              <span style={{color: '#ef4444'}}> Chargebacks (Adjustments)</span>.
+              {startDate && endDate && (
+                <span> Date range: {formatDate(startDate)} to {formatDate(endDate)}</span>
+              )}
+            </p>
+            {callsMetricsLoading ? (
+              <div className="loading">Loading chart...</div>
+            ) : callsMetricsError ? (
+              <div className="error" style={{padding: '1rem', background: '#fee2e2', color: '#991b1b', borderRadius: '0.375rem'}}>
+                Error loading calls metrics: {callsMetricsError}
+              </div>
+            ) : (
+              <CallsMetricsChart data={callsMetricsData} showLast15Days={callsMetricsData.length > 15} />
             )}
           </div>
         </div>

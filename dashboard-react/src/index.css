@@ -1603,6 +1603,16 @@ body {
     width: 100%;
 }
 
+.calls-metrics-chart-container {
+    width: 100%;
+}
+
+.calls-metrics-chart-container .chart-wrapper {
+    position: relative;
+    height: 350px;
+    width: 100%;
+}
+
 /* Analysis Summary Statistics */
 .analysis-summary {
     background-color: var(--card-bg);
@@ -1657,6 +1667,10 @@ body {
     }
     
     .daily-revenue-chart-container .chart-wrapper {
+        height: 300px;
+    }
+    
+    .calls-metrics-chart-container .chart-wrapper {
         height: 300px;
     }
     

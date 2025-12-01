@@ -2,6 +2,7 @@
 import express from 'express';
 import { fileURLToPath } from 'url';
 import { dirname, join } from 'path';
+import fs from 'fs';
 import pg from 'pg';
 import dotenv from 'dotenv';
 import cors from 'cors';
@@ -60,7 +61,11 @@ app.use('/api', (req, res, next) => {
   next();
 });
 
-// Serve static files from dashboard-build directory at /ringba-sync-dashboard path
+// Serve static files from dashboard-build directory
+// Serve at both root (/) and /ringba-sync-dashboard for compatibility
+// Root path is for local development and subdomain deployment
+// /ringba-sync-dashboard path is for path-based deployment
+app.use('/', express.static(DASHBOARD_BUILD_DIR));
 app.use('/ringba-sync-dashboard', express.static(DASHBOARD_BUILD_DIR));
 
 // Helper to send JSON response
@@ -686,6 +691,224 @@ app.get('/api/chargeback', async (req, res) => {
   }
 });
 
+// Daily Calls Metrics endpoint - tracks total calls, completed calls, connected calls, and chargebacks per day
+app.get('/api/calls-metrics', async (req, res) => {
+  let client = null;
+  try {
+    const { startDate, endDate } = req.query;
+    console.log('[API] /api/calls-metrics called', { startDate, endDate });
+    
+    client = await pool.connect();
+    
+    // Build date filter
+    let dateFilter = '';
+    const params = [];
+    
+    if (startDate && endDate) {
+      dateFilter = `WHERE summary_date >= $1 AND summary_date <= $2`;
+      params.push(startDate, endDate);
+    } else if (startDate) {
+      dateFilter = `WHERE summary_date >= $1`;
+      params.push(startDate);
+    } else if (endDate) {
+      dateFilter = `WHERE summary_date <= $1`;
+      params.push(endDate);
+    }
+    
+    // Query 1: Aggregate calls data from ringba_campaign_summary per day
+    const callsQuery = `
+      SELECT 
+        summary_date::text as date,
+        SUM(total_calls) as total_calls,
+        SUM(completed_calls) as completed_calls,
+        SUM(connected_calls) as connected_calls
+      FROM ringba_campaign_summary
+      ${dateFilter}
+      GROUP BY summary_date
+      ORDER BY summary_date ASC
+    `;
+    
+    const callsResult = await client.query(callsQuery, params);
+    
+    // Query 2: Count chargebacks (adjustments) per day from adjustment_details
+    // Parse date from time_of_call field - handle multiple formats
+    // Use a simpler approach: extract all dates first, then filter in JavaScript if needed
+    // Or use a subquery with proper date conversion
+    
+    let chargebacksQuery = `
+      SELECT 
+        CASE 
+          WHEN time_of_call ~ '^[0-9]{2}/[0-9]{2}/[0-9]{4}' THEN
+            TO_CHAR(TO_DATE(SUBSTRING(time_of_call, 1, 10), 'MM/DD/YYYY'), 'YYYY-MM-DD')
+          WHEN time_of_call ~ '^[0-9]{4}-[0-9]{2}-[0-9]{2}' THEN
+            SUBSTRING(time_of_call, 1, 10)
+          ELSE
+            NULL
+        END as date,
+        COUNT(*) as chargebacks_count
+      FROM adjustment_details
+    `;
+    
+    // Build WHERE clause for date filtering on the converted date
+    let chargebacksWhereClause = '';
+    const chargebacksParams = [];
+    
+    if (startDate || endDate) {
+      // Use a subquery to filter by converted date
+      chargebacksQuery = `
+        SELECT 
+          date,
+          COUNT(*) as chargebacks_count
+        FROM (
+          SELECT 
+            CASE 
+              WHEN time_of_call ~ '^[0-9]{2}/[0-9]{2}/[0-9]{4}' THEN
+                TO_CHAR(TO_DATE(SUBSTRING(time_of_call, 1, 10), 'MM/DD/YYYY'), 'YYYY-MM-DD')
+              WHEN time_of_call ~ '^[0-9]{4}-[0-9]{2}-[0-9]{2}' THEN
+                SUBSTRING(time_of_call, 1, 10)
+              ELSE
+                NULL
+            END as date
+          FROM adjustment_details
+        ) AS date_extracted
+        WHERE date IS NOT NULL
+      `;
+      
+      if (startDate && endDate) {
+        chargebacksWhereClause = ` AND date >= $1 AND date <= $2`;
+        chargebacksParams.push(startDate, endDate);
+      } else if (startDate) {
+        chargebacksWhereClause = ` AND date >= $1`;
+        chargebacksParams.push(startDate);
+      } else if (endDate) {
+        chargebacksWhereClause = ` AND date <= $1`;
+        chargebacksParams.push(endDate);
+      }
+      
+      chargebacksQuery += chargebacksWhereClause;
+      chargebacksQuery += ` GROUP BY date ORDER BY date ASC`;
+    } else {
+      // No date filter - get all dates
+      chargebacksQuery += `
+        GROUP BY CASE 
+          WHEN time_of_call ~ '^[0-9]{2}/[0-9]{2}/[0-9]{4}' THEN
+            TO_CHAR(TO_DATE(SUBSTRING(time_of_call, 1, 10), 'MM/DD/YYYY'), 'YYYY-MM-DD')
+          WHEN time_of_call ~ '^[0-9]{4}-[0-9]{2}-[0-9]{2}' THEN
+            SUBSTRING(time_of_call, 1, 10)
+          ELSE
+            NULL
+        END
+        HAVING CASE 
+          WHEN time_of_call ~ '^[0-9]{2}/[0-9]{2}/[0-9]{4}' THEN
+            TO_CHAR(TO_DATE(SUBSTRING(time_of_call, 1, 10), 'MM/DD/YYYY'), 'YYYY-MM-DD')
+          WHEN time_of_call ~ '^[0-9]{4}-[0-9]{2}-[0-9]{2}' THEN
+            SUBSTRING(time_of_call, 1, 10)
+          ELSE
+            NULL
+        END IS NOT NULL
+        ORDER BY date ASC
+      `;
+    }
+    
+    let chargebacksResult;
+    try {
+      chargebacksResult = await client.query(chargebacksQuery, chargebacksParams);
+    } catch (parseError) {
+      console.warn('[API] Error parsing adjustment_details dates, using simpler approach:', parseError.message);
+      console.warn('[API] Parse error stack:', parseError.stack);
+      // Fallback: Get all and filter in JavaScript
+      const simpleQuery = `
+        SELECT 
+          SUBSTRING(time_of_call, 1, 10) as date_raw,
+          COUNT(*) as chargebacks_count
+        FROM adjustment_details
+        GROUP BY SUBSTRING(time_of_call, 1, 10)
+        ORDER BY date_raw ASC
+      `;
+      const simpleResult = await client.query(simpleQuery);
+      
+      // Convert MM/DD/YYYY to YYYY-MM-DD and filter by date range
+      let filteredRows = simpleResult.rows.map(row => {
+        const dateParts = row.date_raw.split('/');
+        if (dateParts.length === 3) {
+          return {
+            date: `${dateParts[2]}-${dateParts[0].padStart(2, '0')}-${dateParts[1].padStart(2, '0')}`,
+            chargebacks_count: parseInt(row.chargebacks_count) || 0
+          };
+        }
+        // Already in YYYY-MM-DD format
+        return { 
+          date: row.date_raw, 
+          chargebacks_count: parseInt(row.chargebacks_count) || 0 
+        };
+      });
+      
+      // Filter by date range if provided
+      if (startDate || endDate) {
+        filteredRows = filteredRows.filter(row => {
+          if (startDate && endDate) {
+            return row.date >= startDate && row.date <= endDate;
+          } else if (startDate) {
+            return row.date >= startDate;
+          } else if (endDate) {
+            return row.date <= endDate;
+          }
+          return true;
+        });
+      }
+      
+      chargebacksResult = { rows: filteredRows };
+    }
+    
+    // Combine the results by date
+    const callsByDate = {};
+    callsResult.rows.forEach(row => {
+      callsByDate[row.date] = {
+        date: row.date,
+        total_calls: parseInt(row.total_calls) || 0,
+        completed_calls: parseInt(row.completed_calls) || 0,
+        connected_calls: parseInt(row.connected_calls) || 0,
+        chargebacks_count: 0
+      };
+    });
+    
+    // Add chargebacks count
+    chargebacksResult.rows.forEach(row => {
+      const date = row.date;
+      if (callsByDate[date]) {
+        callsByDate[date].chargebacks_count = parseInt(row.chargebacks_count) || 0;
+      } else {
+        // If there are chargebacks but no calls data for that date, still include it
+        callsByDate[date] = {
+          date: date,
+          total_calls: 0,
+          completed_calls: 0,
+          connected_calls: 0,
+          chargebacks_count: parseInt(row.chargebacks_count) || 0
+        };
+      }
+    });
+    
+    // Convert to array and sort by date
+    const metricsData = Object.values(callsByDate).sort((a, b) => {
+      return new Date(a.date) - new Date(b.date);
+    });
+    
+    console.log(`[API] Returning ${metricsData.length} days of calls metrics data`);
+    
+    sendJSON(res, {
+      data: metricsData,
+      total: metricsData.length
+    });
+  } catch (error) {
+    console.error('[API Error] Failed to fetch calls metrics:', error);
+    console.error('[API Error] Stack:', error.stack);
+    sendError(res, `Failed to fetch data: ${error.message}`, 500);
+  } finally {
+    if (client) client.release();
+  }
+});
+
 // Google Ads Spend endpoints
 // GET: Fetch Google Ads spend for a date range (from ringba_campaign_summary)
 app.get('/api/google-ads-spend', async (req, res) => {
@@ -888,23 +1111,30 @@ app.delete('/api/google-ads-spend/:date', async (req, res) => {
   }
 });
 
-// Catch-all route: serve index.html for React Router
-// Handle both root and /ringba-sync-dashboard paths
+// Catch-all route: serve index.html for React Router (SPA routing)
+// Handle both root (/) and /ringba-sync-dashboard paths
 // API routes are handled above via middleware rewrite
-app.get('/', (req, res) => {
-  res.redirect('/ringba-sync-dashboard/');
-});
-
-app.get('/ringba-sync-dashboard', (req, res) => {
-  res.redirect('/ringba-sync-dashboard/');
-});
-
-app.get('/ringba-sync-dashboard/*', (req, res) => {
-  // Skip if this is an API request (shouldn't happen due to middleware rewrite, but safety check)
-  if (req.path.startsWith('/ringba-sync-dashboard/api')) {
-    return res.status(404).json({ error: 'API route not found' });
+app.get('/*', (req, res, next) => {
+  // Skip API routes
+  if (req.path.startsWith('/api')) {
+    return next(); // Let API routes be handled by their specific handlers
   }
-  // For any other path under /ringba-sync-dashboard, serve index.html (SPA routing)
+  
+  // Skip if this is a static asset request (should be handled by express.static above)
+  // Check if file exists in build directory
+  const requestedPath = join(DASHBOARD_BUILD_DIR, req.path);
+  
+  // If it's a file that exists, express.static should have handled it
+  // Only serve index.html for routes that don't match actual files
+  try {
+    if (fs.existsSync(requestedPath) && fs.statSync(requestedPath).isFile()) {
+      return next(); // Let express.static handle it
+    }
+  } catch (err) {
+    // If we can't check the file, continue to serve index.html
+  }
+  
+  // For all other routes (including root and /ringba-sync-dashboard), serve index.html (SPA routing)
   res.sendFile(join(DASHBOARD_BUILD_DIR, 'index.html'));
 });
 
