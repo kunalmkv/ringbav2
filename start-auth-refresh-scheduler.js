@@ -66,19 +66,90 @@ const getISTTime = () => {
   });
 };
 
-// Track last successful run date
-let lastSuccessfulRunDate = null;
+// Get last successful session creation time from database
+const getLastSuccessfulSessionTime = async (config) => {
+  try {
+    const pg = await import('pg');
+    const { Pool } = pg;
+    
+    const pool = new Pool({
+      host: config.dbHost || process.env.DB_HOST,
+      port: config.dbPort || process.env.DB_PORT || 5432,
+      database: config.dbName || process.env.DB_NAME,
+      user: config.dbUser || process.env.DB_USER,
+      password: config.dbPassword || process.env.DB_PASSWORD,
+      ssl: config.dbSsl ? { rejectUnauthorized: false } : false
+    });
+    
+    const client = await pool.connect();
+    try {
+      // Get the most recent working session (even if expired)
+      const query = `
+        SELECT created_at, expires_at
+        FROM auth_sessions
+        WHERE is_working = TRUE
+        ORDER BY created_at DESC
+        LIMIT 1
+      `;
+      
+      const result = await client.query(query);
+      
+      if (result.rows.length === 0) {
+        return null; // No previous session found
+      }
+      
+      return {
+        createdAt: new Date(result.rows[0].created_at),
+        expiresAt: new Date(result.rows[0].expires_at)
+      };
+    } finally {
+      client.release();
+      await pool.end();
+    }
+  } catch (error) {
+    console.error('[Scheduler] Error getting last session from database:', error.message);
+    return null;
+  }
+};
 
-// Check if 3 days have passed since last successful run
-const shouldRun = () => {
-  if (!lastSuccessfulRunDate) {
-    return true; // First run
+// Check if we should run the refresh
+// Returns: { shouldRun: boolean, reason: string, daysSinceLastRun?: number }
+const shouldRun = async (config) => {
+  const lastSession = await getLastSuccessfulSessionTime(config);
+  
+  if (!lastSession) {
+    return { shouldRun: true, reason: 'No previous session found - first run' };
   }
   
   const now = new Date();
-  const daysDiff = Math.floor((now - lastSuccessfulRunDate) / (1000 * 60 * 60 * 24));
+  const daysSinceLastRun = Math.floor((now - lastSession.createdAt) / (1000 * 60 * 60 * 24));
+  const hoursUntilExpiry = (lastSession.expiresAt - now) / (1000 * 60 * 60);
   
-  return daysDiff >= 3;
+  // Check if session is expired or about to expire (within 6 hours)
+  if (hoursUntilExpiry <= 6) {
+    return { 
+      shouldRun: true, 
+      reason: `Session expires in ${hoursUntilExpiry.toFixed(1)} hours - refreshing proactively`,
+      daysSinceLastRun,
+      hoursUntilExpiry: hoursUntilExpiry.toFixed(1)
+    };
+  }
+  
+  // Check if 3 days have passed since last refresh
+  if (daysSinceLastRun >= 3) {
+    return { 
+      shouldRun: true, 
+      reason: `${daysSinceLastRun} days since last refresh - scheduled refresh`,
+      daysSinceLastRun
+    };
+  }
+  
+  return { 
+    shouldRun: false, 
+    reason: `Only ${daysSinceLastRun} days since last refresh (need 3 days)`,
+    daysSinceLastRun,
+    hoursUntilExpiry: hoursUntilExpiry.toFixed(1)
+  };
 };
 
 // Job execution wrapper with error handling
@@ -91,17 +162,26 @@ const executeAuthRefresh = async (config, scheduleName) => {
   console.log(`[${istTime}] Starting: ${scheduleName}`);
   console.log('='.repeat(70));
   
-  // Check if we should run (every 3 days)
-  if (!shouldRun()) {
-    const daysSinceLastRun = Math.floor(
-      (Date.now() - lastSuccessfulRunDate) / (1000 * 60 * 60 * 24)
-    );
-    console.log(`[INFO] Skipping run - only ${daysSinceLastRun} days since last successful run`);
-    console.log(`[INFO] Next run will be in ${3 - daysSinceLastRun} days`);
+  // Check if we should run (every 3 days or if session is about to expire)
+  const runCheck = await shouldRun(config);
+  if (!runCheck.shouldRun) {
+    console.log(`[INFO] Skipping run - ${runCheck.reason}`);
+    if (runCheck.hoursUntilExpiry) {
+      console.log(`[INFO] Current session expires in ${runCheck.hoursUntilExpiry} hours`);
+    }
+    if (runCheck.daysSinceLastRun !== undefined) {
+      console.log(`[INFO] Next run will be in ${3 - runCheck.daysSinceLastRun} days`);
+    }
     console.log('='.repeat(70));
     console.log('');
-    return { success: true, skipped: true, reason: 'Not yet 3 days since last run' };
+    return { success: true, skipped: true, reason: runCheck.reason };
   }
+  
+  console.log(`[INFO] Running refresh - ${runCheck.reason}`);
+  if (runCheck.hoursUntilExpiry) {
+    console.log(`[INFO] Current session expires in ${runCheck.hoursUntilExpiry} hours`);
+  }
+  console.log('');
   
   try {
     console.log('[INFO] Executing auth refresh service...');
@@ -118,8 +198,11 @@ const executeAuthRefresh = async (config, scheduleName) => {
     const result = resultEither.right;
     const duration = ((Date.now() - startTime) / 1000).toFixed(2);
     
-    // Update last successful run date
-    lastSuccessfulRunDate = new Date();
+    // Get the new session info for next run calculation
+    const newSession = await getLastSuccessfulSessionTime(config);
+    const nextRunDate = newSession 
+      ? new Date(newSession.createdAt.getTime() + 3 * 24 * 60 * 60 * 1000)
+      : new Date(Date.now() + 3 * 24 * 60 * 60 * 1000);
     
     console.log('');
     console.log('='.repeat(70));
@@ -127,7 +210,7 @@ const executeAuthRefresh = async (config, scheduleName) => {
     console.log('='.repeat(70));
     console.log(`  Session ID:            ${result.sessionId || 'N/A'}`);
     console.log(`  Expires At:            ${result.expiresAtISO || 'N/A'}`);
-    console.log(`  Next Run:              In 3 days (${new Date(lastSuccessfulRunDate.getTime() + 3 * 24 * 60 * 60 * 1000).toLocaleString('en-US', { timeZone: 'Asia/Kolkata' })})`);
+    console.log(`  Next Run:              In 3 days (${nextRunDate.toLocaleString('en-US', { timeZone: 'Asia/Kolkata' })})`);
     console.log('='.repeat(70));
     console.log('');
     
@@ -321,23 +404,28 @@ class AuthRefreshScheduler {
     console.log('');
     
     // Display next run times
-    this.displayNextRuns();
+    await this.displayNextRuns();
   }
   
   // Display next run times for all services
-  displayNextRuns() {
+  async displayNextRuns() {
     console.log('Scheduled runs:');
     console.log('-'.repeat(70));
     
-    this.schedules.forEach(schedule => {
+    for (const schedule of this.schedules) {
       const stats = this.jobStats.get(schedule.name);
-      const nextRunInfo = lastSuccessfulRunDate 
-        ? `Next run: ${new Date(lastSuccessfulRunDate.getTime() + 3 * 24 * 60 * 60 * 1000).toLocaleString('en-US', { timeZone: 'Asia/Kolkata' })}`
+      const lastSession = await getLastSuccessfulSessionTime(this.appConfig);
+      const nextRunInfo = lastSession 
+        ? `Next run: ${new Date(lastSession.createdAt.getTime() + 3 * 24 * 60 * 60 * 1000).toLocaleString('en-US', { timeZone: 'Asia/Kolkata' })}`
         : 'Next run: Will execute on first scheduled time';
       console.log(`  ${schedule.name.padEnd(45)} ${schedule.time} IST`);
       console.log(`    ${nextRunInfo}`);
+      if (lastSession) {
+        const hoursUntilExpiry = (lastSession.expiresAt - new Date()) / (1000 * 60 * 60);
+        console.log(`    Current session expires in: ${hoursUntilExpiry.toFixed(1)} hours`);
+      }
       console.log(`    Stats: ${stats?.totalRuns || 0} checks, ${stats?.successfulRuns || 0} successful, ${stats?.skippedRuns || 0} skipped, ${stats?.failedRuns || 0} failed`);
-    });
+    }
     
     console.log('-'.repeat(70));
     console.log('');
