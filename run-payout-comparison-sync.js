@@ -8,19 +8,23 @@
  * Usage:
  *   node run-payout-comparison-sync.js <date> [endDate]
  *   node run-payout-comparison-sync.js <date-range>
+ *   node run-payout-comparison-sync.js past15days
  * 
  * Examples:
  *   node run-payout-comparison-sync.js 2025-12-02
  *   node run-payout-comparison-sync.js 2025-11-01 2025-11-30
  *   node run-payout-comparison-sync.js 2025-11-01:2025-11-30
+ *   node run-payout-comparison-sync.js past15days
  * 
  * Date formats supported:
  *   - YYYY-MM-DD (e.g., 2025-12-02)
  *   - MM/DD/YYYY (e.g., 12/02/2025)
  *   - DD-MM-YYYY (e.g., 02-12-2025)
+ *   - past15days (IST-aware, past 15 days excluding today)
  */
 
 import { syncPayoutComparisonForDate, syncPayoutComparisonForDateRange } from './src/services/payout-comparison-sync.js';
+import { getPast15DaysRangeForHistorical } from './src/utils/date-utils.js';
 import pg from 'pg';
 import dotenv from 'dotenv';
 import { fileURLToPath } from 'url';
@@ -61,30 +65,43 @@ const main = async () => {
   const args = process.argv.slice(2);
   
   if (args.length === 0) {
-    console.error('Usage: node run-payout-comparison-sync.js <date> [endDate]');
+    console.error('Usage: node run-payout-comparison-sync.js <date> [endDate] | past15days');
     console.error('Examples:');
     console.error('  node run-payout-comparison-sync.js 2025-11-21');
     console.error('  node run-payout-comparison-sync.js 2025-11-01 2025-11-30');
     console.error('  node run-payout-comparison-sync.js 2025-11-01:2025-11-30');
+    console.error('  node run-payout-comparison-sync.js past15days');
     process.exit(1);
   }
   
   let startDate, endDate;
   
-  // Handle date range format: "2025-11-01:2025-11-30"
-  if (args[0].includes(':')) {
-    [startDate, endDate] = args[0].split(':').map(parseDate);
-  } else if (args.length === 1) {
-    startDate = parseDate(args[0]);
-    endDate = startDate;
-  } else if (args.length === 2) {
-    startDate = parseDate(args[0]);
-    endDate = parseDate(args[1]);
-  }
-  
-  if (!startDate || !endDate) {
-    console.error('Invalid date format. Use YYYY-MM-DD, MM/DD/YYYY, or DD-MM-YYYY.');
-    process.exit(1);
+  // Handle "past15days" keyword
+  if (args[0].toLowerCase() === 'past15days') {
+    const dateRangeObj = getPast15DaysRangeForHistorical();
+    startDate = dateRangeObj.startDate.getUTCFullYear() + '-' +
+      String(dateRangeObj.startDate.getUTCMonth() + 1).padStart(2, '0') + '-' +
+      String(dateRangeObj.startDate.getUTCDate()).padStart(2, '0');
+    endDate = dateRangeObj.endDate.getUTCFullYear() + '-' +
+      String(dateRangeObj.endDate.getUTCMonth() + 1).padStart(2, '0') + '-' +
+      String(dateRangeObj.endDate.getUTCDate()).padStart(2, '0');
+    console.log(`[Sync] Using past 15 days range: ${startDate} to ${endDate}`);
+  } else {
+    // Handle date range format: "2025-11-01:2025-11-30"
+    if (args[0].includes(':')) {
+      [startDate, endDate] = args[0].split(':').map(parseDate);
+    } else if (args.length === 1) {
+      startDate = parseDate(args[0]);
+      endDate = startDate;
+    } else if (args.length === 2) {
+      startDate = parseDate(args[0]);
+      endDate = parseDate(args[1]);
+    }
+    
+    if (!startDate || !endDate) {
+      console.error('Invalid date format. Use YYYY-MM-DD, MM/DD/YYYY, DD-MM-YYYY, or "past15days".');
+      process.exit(1);
+    }
   }
   
   if (startDate === endDate) {
