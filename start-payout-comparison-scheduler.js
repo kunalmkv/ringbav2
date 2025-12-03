@@ -5,16 +5,17 @@
  * 
  * This script starts a scheduler that runs the Payout Comparison Sync service
  * multiple times daily at:
- * - 9:25 PM IST (21:25)
- * - 12:25 AM IST (00:25 - midnight)
- * - 3:25 AM IST (03:25)
- * - 6:25 AM IST (06:25)
+ * - 9:30 PM IST (21:30)
+ * - 12:30 AM IST (00:30 - midnight)
+ * - 3:30 AM IST (03:30)
+ * - 6:30 AM IST (06:30)
  * 
  * The service calculates and stores payout comparison data (Ringba vs eLocal)
- * in the payout_comparison_daily table.
+ * in the payout_comparison_daily table for the past 15 days (IST timezone-aware).
  * 
- * IMPORTANT: If the service runs after 12:00 AM IST, it syncs the previous day's data
- * (because Ringba uses EST/CST timezone which is behind IST).
+ * IMPORTANT: The service syncs past 15 days excluding today, based on IST timezone.
+ * If it runs before 12:00 PM IST, it considers "today" as the previous IST day.
+ * If it runs after 12:00 PM IST, it considers "today" as the current IST day.
  * 
  * Usage:
  *   node start-payout-comparison-scheduler.js
@@ -27,7 +28,11 @@ import cron from 'node-cron';
 import { fileURLToPath } from 'url';
 import { dirname, join } from 'path';
 import dotenv from 'dotenv';
-import { syncPayoutComparisonForDate } from './src/services/payout-comparison-sync.js';
+import { syncPayoutComparisonForDateRange } from './src/services/payout-comparison-sync.js';
+import {
+  getPast15DaysRangeForHistorical,
+  getDateRangeDescription
+} from './src/utils/date-utils.js';
 import {
   initFileLogger,
   setupConsoleLogging,
@@ -57,145 +62,105 @@ const getISTTime = () => {
 };
 
 /**
- * Get target date for payout comparison sync based on IST timezone
- * If it's after 12 AM IST (midnight) and before 12 PM IST (noon), sync previous day
- * (because Ringba uses EST/CST which is behind IST)
- * If it's 12 PM IST (noon) or later, sync current day
- * Returns date string in YYYY-MM-DD format
+ * Get date range for payout comparison sync (past 15 days, IST timezone-aware)
+ * Uses getPast15DaysRangeForHistorical which:
+ * - Gets past 15 days EXCLUDING the current date (ends at yesterday based on IST)
+ * - Is timezone-independent (uses IST regardless of server location)
+ * - Handles midnight edge case:
+ *   - Before 12:00 PM IST: considers "today" as the previous IST day
+ *   - After 12:00 PM IST: considers "today" as the current IST day
  * 
- * IMPORTANT: When it's 12:25 AM IST on Dec 3, we want to sync Dec 2 (yesterday in IST)
+ * Returns object with startDate and endDate in YYYY-MM-DD format
  */
-const getPayoutComparisonDate = () => {
-  // Get current time in IST timezone
-  const now = new Date();
+const getPayoutComparisonDateRange = () => {
+  // Get past 15 days range (IST-aware, excludes today)
+  const dateRangeObj = getPast15DaysRangeForHistorical();
   
-  // Get IST date components directly
-  const istDateString = now.toLocaleString('en-US', { 
-    timeZone: 'Asia/Kolkata',
-    year: 'numeric',
-    month: '2-digit',
-    day: '2-digit',
-    hour: '2-digit',
-    minute: '2-digit',
-    second: '2-digit',
-    hour12: false
-  });
+  // Convert Date objects to YYYY-MM-DD format
+  const startDate = dateRangeObj.startDate.getUTCFullYear() + '-' +
+    String(dateRangeObj.startDate.getUTCMonth() + 1).padStart(2, '0') + '-' +
+    String(dateRangeObj.startDate.getUTCDate()).padStart(2, '0');
   
-  // Parse IST time string: format is "MM/DD/YYYY, HH:MM:SS"
-  const istParts = istDateString.match(/(\d{2})\/(\d{2})\/(\d{4}), (\d{2}):(\d{2}):(\d{2})/);
-  if (!istParts) {
-    // Fallback: use current UTC date
-    const today = new Date();
-    const year = today.getUTCFullYear();
-    const month = String(today.getUTCMonth() + 1).padStart(2, '0');
-    const day = String(today.getUTCDate()).padStart(2, '0');
-    return `${year}-${month}-${day}`;
-  }
-  
-  // Extract IST components
-  const monthIST = parseInt(istParts[1], 10);  // MM (1-12)
-  const dayIST = parseInt(istParts[2], 10);     // DD
-  const yearIST = parseInt(istParts[3], 10);    // YYYY
-  let hoursIST = parseInt(istParts[4], 10);     // HH (0-23)
-  const minutesIST = parseInt(istParts[5], 10); // MM
-  
-  // Handle edge case where hour is 24 (should be 0 for midnight)
-  if (hoursIST === 24) {
-    hoursIST = 0;
-  }
-  
-  // Determine target date based on IST time
-  // Logic: If it's between 12:00 AM (00:00) and 11:59 AM IST, sync previous day
-  //        If it's 12:00 PM (12:00) or later IST, sync current day
-  // 
-  // Examples:
-  // - Dec 3, 12:25 AM IST → sync Dec 2 (yesterday)
-  // - Dec 3, 3:25 AM IST → sync Dec 2 (yesterday)
-  // - Dec 3, 6:25 AM IST → sync Dec 2 (yesterday)
-  // - Dec 3, 9:25 PM IST → sync Dec 3 (today)
-  
-  let targetYear, targetMonth, targetDay;
-  
-  if (hoursIST >= 0 && hoursIST < 12) {
-    // It's between 12:00 AM (midnight) and 11:59 AM IST
-    // We want to sync "yesterday" in IST terms
-    // Work directly with the date components to avoid timezone issues
-    
-    // Create date components for yesterday
-    if (dayIST > 1) {
-      // Simple case: just subtract 1 from day
-      targetYear = yearIST;
-      targetMonth = monthIST;
-      targetDay = dayIST - 1;
-    } else {
-      // Day is 1, need to go to previous month
-      if (monthIST > 1) {
-        // Go to previous month
-        targetYear = yearIST;
-        targetMonth = monthIST - 1;
-        // Get last day of previous month
-        const lastDayOfPrevMonth = new Date(Date.UTC(yearIST, monthIST - 1, 0)).getUTCDate();
-        targetDay = lastDayOfPrevMonth;
-      } else {
-        // Month is January (1), go to December of previous year
-        targetYear = yearIST - 1;
-        targetMonth = 12;
-        // Get last day of December
-        const lastDayOfDec = new Date(Date.UTC(yearIST - 1, 12, 0)).getUTCDate();
-        targetDay = lastDayOfDec;
-      }
-    }
-  } else {
-    // It's 12:00 PM (noon) or later IST, sync current day
-    targetYear = yearIST;
-    targetMonth = monthIST;
-    targetDay = dayIST;
-  }
-  
-  // Format as YYYY-MM-DD
-  const year = String(targetYear);
-  const month = String(targetMonth).padStart(2, '0');
-  const day = String(targetDay).padStart(2, '0');
-  const result = `${year}-${month}-${day}`;
+  const endDate = dateRangeObj.endDate.getUTCFullYear() + '-' +
+    String(dateRangeObj.endDate.getUTCMonth() + 1).padStart(2, '0') + '-' +
+    String(dateRangeObj.endDate.getUTCDate()).padStart(2, '0');
   
   // Debug logging
-  console.log(`[PayoutComparisonScheduler] Date Calculation:`);
-  console.log(`  - Current IST Date: ${yearIST}-${String(monthIST).padStart(2, '0')}-${String(dayIST).padStart(2, '0')} ${String(hoursIST).padStart(2, '0')}:${String(minutesIST).padStart(2, '0')}`);
-  console.log(`  - Target Date: ${result}`);
+  console.log(`[PayoutComparisonScheduler] Date Range Calculation:`);
+  console.log(`  - Date Range: ${getDateRangeDescription(dateRangeObj)}`);
+  console.log(`  - Start Date: ${startDate} (YYYY-MM-DD)`);
+  console.log(`  - End Date: ${endDate} (YYYY-MM-DD)`);
   
-  return result;
+  return {
+    startDate,
+    endDate,
+    dateRangeObj // Keep original for logging
+  };
 };
 
 // Run the payout comparison sync service
 const runPayoutComparisonSync = async () => {
   const istTime = getISTTime();
-  const targetDate = getPayoutComparisonDate();
+  const dateRange = getPayoutComparisonDateRange();
   
   console.log('');
   console.log('='.repeat(70));
   console.log(`[${istTime}] Starting: Payout Comparison Sync`);
   console.log('='.repeat(70));
-  console.log(`Target Date: ${targetDate}`);
+  console.log(`Date Range: ${getDateRangeDescription(dateRange.dateRangeObj)}`);
+  console.log(`Start Date: ${dateRange.startDate} | End Date: ${dateRange.endDate}`);
   console.log('');
   
   try {
     const startTime = Date.now();
-    const result = await syncPayoutComparisonForDate(targetDate);
+    const result = await syncPayoutComparisonForDateRange(dateRange.startDate, dateRange.endDate);
     const duration = ((Date.now() - startTime) / 1000).toFixed(2);
     
     console.log('');
     console.log('='.repeat(70));
-    console.log(`[SUCCESS] Payout Comparison Sync - ${targetDate} completed in ${duration}s`);
+    console.log(`[SUCCESS] Payout Comparison Sync completed in ${duration}s`);
     console.log('='.repeat(70));
-    console.log(`Ringba Total: $${result.ringbaTotal.toFixed(2)}`);
-    console.log(`eLocal Total: $${result.elocalTotal.toFixed(2)}`);
-    console.log(`Adjustments: $${result.adjustments.toFixed(2)}`);
-    console.log(`Total Calls: ${result.totalCalls}`);
-    console.log(`RPC: $${result.rpc.toFixed(2)}`);
-    console.log(`Google Ads Spend: $${result.googleAdsSpend.toFixed(2)}`);
-    console.log(`Telco: $${result.telco.toFixed(2)}`);
-    console.log(`Net: $${result.net.toFixed(2)}`);
-    console.log(`Net Profit: ${result.netProfit.toFixed(2)}%`);
+    console.log(`Date Range: ${dateRange.startDate} to ${dateRange.endDate}`);
+    console.log(`Total Dates Processed: ${result.total}`);
+    console.log(`Successful: ${result.successful}`);
+    console.log(`Failed: ${result.failed}`);
+    
+    // Calculate aggregate totals from all successful results
+    let totalRingbaTotal = 0;
+    let totalElocalTotal = 0;
+    let totalAdjustments = 0;
+    let totalCalls = 0;
+    let totalRpc = 0;
+    let totalGoogleAdsSpend = 0;
+    let totalTelco = 0;
+    let totalNet = 0;
+    
+    result.results.forEach(r => {
+      if (r.status === 'success' && r.data) {
+        totalRingbaTotal += r.data.ringbaTotal || 0;
+        totalElocalTotal += r.data.elocalTotal || 0;
+        totalAdjustments += r.data.adjustments || 0;
+        totalCalls += r.data.totalCalls || 0;
+        totalRpc += r.data.rpc || 0;
+        totalGoogleAdsSpend += r.data.googleAdsSpend || 0;
+        totalTelco += r.data.telco || 0;
+        totalNet += r.data.net || 0;
+      }
+    });
+    
+    const avgNetProfit = totalElocalTotal > 0 ? ((totalNet / totalElocalTotal) * 100) : 0;
+    
+    console.log('');
+    console.log('Aggregate Totals (across all dates):');
+    console.log(`  Ringba Total: $${totalRingbaTotal.toFixed(2)}`);
+    console.log(`  eLocal Total: $${totalElocalTotal.toFixed(2)}`);
+    console.log(`  Adjustments: $${totalAdjustments.toFixed(2)}`);
+    console.log(`  Total Calls: ${totalCalls}`);
+    console.log(`  RPC: $${totalRpc.toFixed(2)}`);
+    console.log(`  Google Ads Spend: $${totalGoogleAdsSpend.toFixed(2)}`);
+    console.log(`  Telco: $${totalTelco.toFixed(2)}`);
+    console.log(`  Net: $${totalNet.toFixed(2)}`);
+    console.log(`  Net Profit: ${avgNetProfit.toFixed(2)}%`);
     console.log('='.repeat(70));
     console.log('');
     
@@ -203,8 +168,9 @@ const runPayoutComparisonSync = async () => {
   } catch (error) {
     console.error('');
     console.error('='.repeat(70));
-    console.error(`[ERROR] Payout Comparison Sync - ${targetDate} failed`);
+    console.error(`[ERROR] Payout Comparison Sync failed`);
     console.error('='.repeat(70));
+    console.error(`Date Range: ${dateRange.startDate} to ${dateRange.endDate}`);
     console.error(`Error: ${error.message}`);
     if (error.stack) {
       console.error('');
@@ -216,103 +182,278 @@ const runPayoutComparisonSync = async () => {
   }
 };
 
-// Main scheduler initialization
-(async () => {
-  // Initialize file logger (optional - will continue without it if it fails)
-  let logger = null;
+// Main scheduler class
+class PayoutComparisonScheduler {
+  constructor() {
+    this.tasks = new Map();
+    this.jobStats = new Map();
+    this.isRunning = false;
+    this.logFile = null;
+    this.loggingEnabled = false;
+    
+    // Schedule configuration - Updated times as requested
+    this.schedules = [
+      { name: 'Payout Comparison Sync - 9:30 PM', time: '21:30', cron: '30 21 * * *' },
+      { name: 'Payout Comparison Sync - 12:30 AM', time: '00:30', cron: '30 0 * * *' },
+      { name: 'Payout Comparison Sync - 3:30 AM', time: '03:30', cron: '30 3 * * *' },
+      { name: 'Payout Comparison Sync - 6:30 AM', time: '06:30', cron: '30 6 * * *' }
+    ];
+  }
+  
+  // Initialize file logging
+  async initializeLogging() {
   try {
     const timestamp = new Date().toISOString().replace(/[:.]/g, '-').slice(0, -5);
     const logFilename = `payout-comparison-scheduler-${timestamp}.log`;
-    logger = await initFileLogger(logFilename, 'Payout Comparison Sync Scheduler');
-    if (logger) {
-      setupConsoleLogging();
-      console.log(`[INFO] Logging to file: ${logger}`);
+      this.logFile = await initFileLogger(logFilename, 'Payout Comparison Sync Scheduler');
+      
+      if (this.logFile) {
+        await setupConsoleLogging();
+        this.loggingEnabled = true;
+        console.log(`[INFO] Logging to file: ${this.logFile}`);
+        return true;
+      }
+      return false;
+    } catch (error) {
+      console.error('[ERROR] Failed to initialize file logging:', error.message);
+      return false;
     }
-  } catch (error) {
-    console.warn('[WARN] File logging not available, continuing with console logging only');
   }
 
-  // Schedule the service to run at specified times
+  // Initialize scheduler
+  async initialize() {
 console.log('');
 console.log('='.repeat(70));
 console.log('Payout Comparison Sync Scheduler');
 console.log('='.repeat(70));
-console.log('Scheduled times (IST):');
-console.log('  - 9:25 PM (21:25)');
-console.log('  - 12:25 AM (00:25)');
-console.log('  - 3:25 AM (03:25)');
-console.log('  - 6:25 AM (06:25)');
-console.log('');
-console.log('Current IST Time:', getISTTime());
+    console.log(`Timezone: Asia/Kolkata (IST)`);
+    console.log(`Total Schedules: ${this.schedules.length}`);
 console.log('='.repeat(70));
 console.log('');
 
-// Schedule cron jobs for IST timezone
-// Note: node-cron uses server's local timezone
-// If server is in IST, use these cron expressions directly:
-// - 9:25 PM IST = '25 21 * * *'
-// - 12:25 AM IST = '25 0 * * *'
-// - 3:25 AM IST = '25 3 * * *'
-// - 6:25 AM IST = '25 6 * * *'
-//
-// If server is in UTC, convert IST to UTC (IST = UTC + 5:30):
-// - 9:25 PM IST (21:25) = 3:55 PM UTC (15:55) = '55 15 * * *'
-// - 12:25 AM IST (00:25) = 6:55 PM UTC previous day (18:55) = '55 18 * * *'
-// - 3:25 AM IST (03:25) = 9:55 PM UTC previous day (21:55) = '55 21 * * *'
-// - 6:25 AM IST (06:25) = 12:55 AM UTC (00:55) = '55 0 * * *'
-//
-// For now, assuming server is in IST or same timezone as campaign-summary-scheduler
-// Adjust the cron expressions below if your server is in a different timezone
-
-// Schedule: 9:25 PM IST
-cron.schedule('25 21 * * *', async () => {
+    // Initialize file logging
+    await this.initializeLogging();
+    
+    console.log(`[INFO] Current IST Time: ${getISTTime()}`);
+    console.log('');
+  }
+  
+  // Schedule a service
+  scheduleService(scheduleConfig) {
+    // Initialize job stats
+    this.jobStats.set(scheduleConfig.name, {
+      totalRuns: 0,
+      successfulRuns: 0,
+      failedRuns: 0,
+      lastRun: null,
+      lastResult: null
+    });
+    
+    // Create cron task with IST timezone
+    const task = cron.schedule(
+      scheduleConfig.cron,
+      async () => {
+        const stats = this.jobStats.get(scheduleConfig.name);
+        stats.totalRuns++;
+        stats.lastRun = new Date().toISOString();
+        
+        try {
   await runPayoutComparisonSync();
-}, {
-  scheduled: true
-});
+          stats.successfulRuns++;
+        } catch (error) {
+          stats.failedRuns++;
+          console.error(`[ERROR] ${scheduleConfig.name} failed:`, error.message);
+        }
+      },
+      {
+        scheduled: false,
+        timezone: 'Asia/Kolkata'
+      }
+    );
+    
+    this.tasks.set(scheduleConfig.name, task);
+    
+    console.log(`[SCHEDULED] ${scheduleConfig.name}`);
+    console.log(`  Schedule: Daily at ${scheduleConfig.time} IST`);
+    console.log(`  Cron: ${scheduleConfig.cron}`);
+    console.log(`  Timezone: Asia/Kolkata`);
+    console.log('');
+  }
+  
+  // Start all scheduled services
+  async start() {
+    if (this.isRunning) {
+      console.log('[WARN] Scheduler is already running');
+      return;
+    }
+    
+    await this.initialize();
+    
+    // Schedule all services
+    this.schedules.forEach(schedule => {
+      this.scheduleService(schedule);
+    });
+    
+    // Start all tasks
+    this.tasks.forEach((task, name) => {
+      task.start();
+    });
+    
+    this.isRunning = true;
+    
+    console.log('='.repeat(70));
+    console.log('[SUCCESS] Scheduler started successfully!');
+    console.log('='.repeat(70));
+    console.log(`[INFO] All ${this.tasks.size} schedules are active and running`);
+    console.log(`[INFO] Current IST time: ${getISTTime()}`);
+    if (this.logFile) {
+      console.log(`[INFO] Log file: ${this.logFile}`);
+    }
+    console.log('');
+    console.log('[INFO] Scheduler is running. Press Ctrl+C to stop.');
+    console.log('');
+    
+    // Display next run times
+    this.displayNextRuns();
+  }
+  
+  // Display next run times for all services
+  displayNextRuns() {
+    console.log('Scheduled runs:');
+    console.log('-'.repeat(70));
+    
+    this.schedules.forEach(schedule => {
+      const stats = this.jobStats.get(schedule.name);
+      console.log(`  ${schedule.name.padEnd(50)} ${schedule.time} IST (${stats?.totalRuns || 0} runs)`);
+    });
+    
+    console.log('-'.repeat(70));
+    console.log('');
+  }
+  
+  // Stop all scheduled services
+  async stop() {
+    if (!this.isRunning) {
+      console.log('[WARN] Scheduler is not running');
+      return;
+    }
+    
+    this.tasks.forEach((task, name) => {
+      task.stop();
+    });
+    
+    this.isRunning = false;
+    console.log('[INFO] Scheduler stopped');
+    
+    // Close logger if enabled
+    if (this.loggingEnabled) {
+      const logPath = await closeLogger();
+      if (logPath) {
+        console.log(`[INFO] Log file saved to: ${logPath}`);
+      }
+    }
+  }
+  
+  // Get statistics
+  getStats() {
+    const stats = {};
+    this.jobStats.forEach((jobStats, name) => {
+      stats[name] = {
+        ...jobStats,
+        successRate: jobStats.totalRuns > 0
+          ? ((jobStats.successfulRuns / jobStats.totalRuns) * 100).toFixed(2) + '%'
+          : '0%'
+      };
+    });
+    return stats;
+  }
+}
 
-// Schedule: 12:25 AM IST
-cron.schedule('25 0 * * *', async () => {
-  await runPayoutComparisonSync();
-}, {
-  scheduled: true
-});
-
-// Schedule: 3:25 AM IST
-cron.schedule('25 3 * * *', async () => {
-  await runPayoutComparisonSync();
-}, {
-  scheduled: true
-});
-
-// Schedule: 6:25 AM IST
-cron.schedule('25 6 * * *', async () => {
-  await runPayoutComparisonSync();
-}, {
-  scheduled: true
-});
-
-console.log('✓ Scheduler started. Waiting for scheduled times...');
-console.log('Press Ctrl+C to stop the scheduler.');
-console.log('');
-
-  // Handle graceful shutdown
-  process.on('SIGINT', () => {
+// Handle graceful shutdown
+const setupGracefulShutdown = (scheduler) => {
+  const shutdown = async () => {
+    console.log('');
+    console.log('[INFO] Shutting down scheduler...');
+    await scheduler.stop();
+    
+    // Display final statistics
     console.log('');
     console.log('='.repeat(70));
-    console.log('Stopping Payout Comparison Sync Scheduler...');
+    console.log('Final Statistics:');
     console.log('='.repeat(70));
-    closeLogger();
+    const stats = scheduler.getStats();
+    Object.entries(stats).forEach(([name, stat]) => {
+      console.log(`${name}:`);
+      console.log(`  Total Runs: ${stat.totalRuns}`);
+      console.log(`  Successful: ${stat.successfulRuns}`);
+      console.log(`  Failed: ${stat.failedRuns}`);
+      console.log(`  Success Rate: ${stat.successRate}`);
+      console.log(`  Last Run: ${stat.lastRun || 'Never'}`);
+      console.log('');
+    });
+    
     process.exit(0);
-  });
+  };
+  
+  process.on('SIGINT', shutdown);
+  process.on('SIGTERM', shutdown);
+};
 
-  process.on('SIGTERM', () => {
-    console.log('');
-    console.log('='.repeat(70));
-    console.log('Stopping Payout Comparison Sync Scheduler...');
-    console.log('='.repeat(70));
-    closeLogger();
-    process.exit(0);
+// Main execution
+const main = async () => {
+  console.log('');
+  console.log('='.repeat(70));
+  console.log('Payout Comparison Sync Scheduler');
+  console.log('='.repeat(70));
+  console.log('This scheduler runs the Payout Comparison Sync service');
+  console.log('multiple times daily at:');
+  console.log('  - 9:30 PM IST (21:30)');
+  console.log('  - 12:30 AM IST (00:30 - midnight)');
+  console.log('  - 3:30 AM IST (03:30)');
+  console.log('  - 6:30 AM IST (06:30)');
+  console.log('');
+  console.log('The service calculates and stores payout comparison data');
+  console.log('(Ringba vs eLocal) in the payout_comparison_daily table.');
+  console.log('');
+  console.log('Date Range: Past 15 days (IST timezone-aware, excludes today)');
+  console.log('Timezone Logic: Before 12 PM IST → previous day as "today"');
+  console.log('                After 12 PM IST → current day as "today"');
+  console.log('='.repeat(70));
+  
+  const scheduler = new PayoutComparisonScheduler();
+  setupGracefulShutdown(scheduler);
+  await scheduler.start();
+  
+  console.log('');
+  console.log('='.repeat(70));
+  console.log('Scheduler Status');
+  console.log('='.repeat(70));
+  console.log(`Current IST Time: ${getISTTime()}`);
+  if (scheduler.logFile) {
+    console.log(`Log File: ${scheduler.logFile}`);
+  }
+  console.log('');
+  console.log('Scheduled Services:');
+  scheduler.schedules.forEach((schedule, index) => {
+    const timeDisplay = schedule.time.length === 5 ? schedule.time : schedule.time.padStart(5, '0');
+    const hour = parseInt(timeDisplay.substring(0, 2), 10);
+    const minute = timeDisplay.substring(3, 5);
+    const ampm = hour >= 12 ? 'PM' : 'AM';
+    const hour12 = hour > 12 ? hour - 12 : (hour === 0 ? 12 : hour);
+    const timeFormatted = `${hour12}:${minute} ${ampm}`;
+    console.log(`  ${index + 1}. ${schedule.name} - Daily at ${timeFormatted} IST`);
   });
-})();
+  console.log('');
+  console.log('The scheduler is now running. Services will execute automatically.');
+  console.log('All logs are being saved to the log file.');
+  console.log('Press Ctrl+C to stop the scheduler.');
+  console.log('='.repeat(70));
+  console.log('');
+};
 
+// Run if executed directly
+if (import.meta.url === `file://${process.argv[1]}`) {
+  main();
+}
+
+export { PayoutComparisonScheduler };

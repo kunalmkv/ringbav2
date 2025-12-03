@@ -1,9 +1,35 @@
-// Runner script for payout comparison sync service
+#!/usr/bin/env node
+
+/**
+ * Payout Comparison Sync Runner Script
+ * 
+ * Runs the payout comparison sync service for a specific date or date range.
+ * 
+ * Usage:
+ *   node run-payout-comparison-sync.js <date> [endDate]
+ *   node run-payout-comparison-sync.js <date-range>
+ * 
+ * Examples:
+ *   node run-payout-comparison-sync.js 2025-12-02
+ *   node run-payout-comparison-sync.js 2025-11-01 2025-11-30
+ *   node run-payout-comparison-sync.js 2025-11-01:2025-11-30
+ * 
+ * Date formats supported:
+ *   - YYYY-MM-DD (e.g., 2025-12-02)
+ *   - MM/DD/YYYY (e.g., 12/02/2025)
+ *   - DD-MM-YYYY (e.g., 02-12-2025)
+ */
+
 import { syncPayoutComparisonForDate, syncPayoutComparisonForDateRange } from './src/services/payout-comparison-sync.js';
 import pg from 'pg';
 import dotenv from 'dotenv';
+import { fileURLToPath } from 'url';
+import { dirname, join } from 'path';
 
-dotenv.config();
+const __filename = fileURLToPath(import.meta.url);
+const __dirname = dirname(__filename);
+
+dotenv.config({ path: join(__dirname, '.env') });
 
 const { Pool } = pg;
 

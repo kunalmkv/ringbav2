@@ -34,6 +34,8 @@
     "scheduler:ringba-cost-current-day": "node start-ringba-cost-sync-current-day.js",
     "scheduler:auth-refresh": "node start-auth-refresh-scheduler.js",
     "scheduler:campaign-summary": "node start-campaign-summary-scheduler.js",
+    "scheduler:payout-comparison": "node start-payout-comparison-scheduler.js",
+    "sync:payout-comparison": "node run-payout-comparison-sync.js",
     "dashboard": "node dashboard-server.js",
     "start": "node src/services/scheduler.js"
   },
