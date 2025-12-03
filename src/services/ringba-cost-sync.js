@@ -148,7 +148,8 @@ const matchCall = (elocalCall, ringbaCall, windowMinutes = 30, durationTolerance
   
   // 2. Match date and time
   // eLocal dates are in EST timezone, Ringba dates may be in different timezone
-  // The 10-minute window should account for timezone differences
+  // Account for timezone differences - eLocal is EST (UTC-5), Ringba may be CST (UTC-6) or other
+  // There can be up to 5-6 hour timezone differences, so we need a larger window
   const elocalDate = parseDate(elocalCall.date_of_call, true); // Mark as eLocal date (EST)
   const ringbaDate = parseDate(ringbaCall.call_date_time, false); // Ringba date
   
@@ -169,6 +170,10 @@ const matchCall = (elocalCall, ringbaCall, windowMinutes = 30, durationTolerance
   
   // Calculate time difference in minutes
   const timeDiff = timeDiffMinutes(elocalDate, ringbaDate);
+  
+  // Both eLocal and Ringba dates are now stored in EST timezone
+  // So we can use the standard 30-minute window for same-day matches
+  // For adjacent days: use 24 hours window
   const effectiveWindow = daysDiff === 0 ? windowMinutes : (24 * 60);
   
   if (timeDiff > effectiveWindow) {

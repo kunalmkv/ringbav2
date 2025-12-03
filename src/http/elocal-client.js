@@ -44,10 +44,10 @@ export const fetchCampaignResultsHtmlWithSavedSession = async (config, dateRange
 
   let requestSuccessful = false;
   try {
-    const res = await fetch(url, { method: 'GET', headers });
-    if (!res.ok) {
-      const text = await res.text().catch(() => '');
-      const err = new Error(`HTTP ${res.status} ${res.statusText}`);
+  const res = await fetch(url, { method: 'GET', headers });
+  if (!res.ok) {
+    const text = await res.text().catch(() => '');
+    const err = new Error(`HTTP ${res.status} ${res.statusText}`);
       err.details = text.slice(0, 300);
       
       // Update session status if request failed (might indicate session issue)
@@ -63,8 +63,8 @@ export const fetchCampaignResultsHtmlWithSavedSession = async (config, dateRange
         }
       }
       
-      throw err;
-    }
+    throw err;
+  }
     
     requestSuccessful = true;
     const html = await res.text();

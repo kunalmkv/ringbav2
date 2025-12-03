@@ -10,7 +10,6 @@ import {
 } from '../utils/helpers.js';
 import {
   getPast10DaysRange,
-  getPast15DaysRangeForHistorical,
   getCurrentDayRange,
   getCurrentDayRangeWithTimezone,
   getDateRangeDescription,
@@ -269,11 +268,10 @@ export const scrapeElocalDataWithDateRange = (config) => (dateRange) => (service
   })();
 };
 
-// Historical data service (past 15 days, excluding today) - STATIC category
-// Uses IST timezone-aware date range calculation
+// Historical data service (past 10 days, excluding today) - STATIC category
 export const scrapeHistoricalData = async (config) => {
-  const dateRange = getPast15DaysRangeForHistorical();
-  console.log(`[INFO] Historical Data Service (STATIC): ${getDateRangeDescription(dateRange)} (15 days, IST-aware)`);
+  const dateRange = getPast10DaysRange();
+  console.log(`[INFO] Historical Data Service (STATIC): ${getDateRangeDescription(dateRange)}`);
   return await scrapeElocalDataWithDateRange(config)(dateRange)('historical')('STATIC');
 };
 
@@ -287,11 +285,10 @@ export const scrapeCurrentDayData = async (config, dateRange = null) => {
   return await scrapeElocalDataWithDateRange(config)(finalDateRange)('current')('STATIC');
 };
 
-// Historical data service for API category (past 15 days, excluding today)
-// Uses IST timezone-aware date range calculation
+// Historical data service for API category (past 10 days, excluding today)
 export const scrapeHistoricalDataAPI = async (config) => {
-  const dateRange = getPast15DaysRangeForHistorical();
-  console.log(`[INFO] Historical Data Service (API): ${getDateRangeDescription(dateRange)} (15 days, IST-aware)`);
+  const dateRange = getPast10DaysRange();
+  console.log(`[INFO] Historical Data Service (API): ${getDateRangeDescription(dateRange)}`);
   return await scrapeElocalDataWithDateRange(config)(dateRange)('historical')('API');
 };
 
@@ -318,6 +315,5 @@ export const elocalServices = {
   scrapeCurrentDayDataAPI,
   getServiceInfo,
   getPast10DaysRange,
-  getPast15DaysRangeForHistorical,
   getCurrentDayRange
 };

@@ -3,6 +3,120 @@
 // eLocal data is in EST (Eastern Standard Time) USA/Canada timezone
 
 /**
+ * Check if a date is in Daylight Saving Time (DST) for Eastern Time
+ * DST runs from second Sunday in March (2 AM EST) to first Sunday in November (2 AM EST)
+ * 
+ * @param {Date} date - Date to check (in UTC)
+ * @returns {boolean} - True if date is in DST (EDT), false if EST
+ */
+const isDateInDST = (date) => {
+  const year = date.getUTCFullYear();
+  
+  // Find second Sunday in March at 2 AM EST (7 AM UTC)
+  const march1 = new Date(Date.UTC(year, 2, 1)); // March 1
+  const march1Day = march1.getUTCDay(); // 0 = Sunday, 1 = Monday, etc.
+  const daysToSecondSunday = (7 - march1Day) % 7 + 7; // Days to second Sunday
+  const dstStart = new Date(Date.UTC(year, 2, 1 + daysToSecondSunday, 7, 0, 0)); // 2 AM EST = 7 AM UTC
+  
+  // Find first Sunday in November at 2 AM EST (7 AM UTC)
+  const nov1 = new Date(Date.UTC(year, 10, 1)); // November 1
+  const nov1Day = nov1.getUTCDay();
+  const daysToFirstSunday = (7 - nov1Day) % 7; // Days to first Sunday
+  const dstEnd = new Date(Date.UTC(year, 10, 1 + daysToFirstSunday, 7, 0, 0)); // 2 AM EST = 7 AM UTC
+  
+  // DST is active if date is >= dstStart and < dstEnd
+  return date >= dstStart && date < dstEnd;
+};
+
+/**
+ * Convert eLocal date string to EST timezone (explicit conversion)
+ * eLocal sends dates in EST, but when we parse them with new Date(), JavaScript
+ * interprets them in the server's local timezone. This function explicitly
+ * treats the date as EST and converts it properly.
+ * 
+ * @param {string} elocalDateStr - eLocal date string (various formats, assumed to be EST)
+ * @returns {string|null} - Date in EST timezone as ISO format (YYYY-MM-DDTHH:mm:ss) or null
+ */
+export const convertElocalDateToEST = (elocalDateStr) => {
+  if (!elocalDateStr) return null;
+  
+  try {
+    const trimmed = elocalDateStr.trim();
+    if (!trimmed) return null;
+    
+    // Try MM/DD/YY or MM/DD/YYYY with time (e.g., "11/18/25 04:38 PM EST" or "12/ 2/25 09:27 AM EST")
+    // eLocal format: "11/18/25 04:38 PM EST" or "12/ 2/25 09:27 AM EST" (note: spaces after / are possible)
+    // -> parse as EST and save as "2025-11-18T16:38:00" or "2025-12-02T09:27:00"
+    const mmddyyyyTime = trimmed.match(/^(\d{1,2})\s*\/\s*(\d{1,2})\s*\/\s*(\d{2,4})\s+(\d{1,2}):(\d{2})(?::(\d{2}))?\s*(AM|PM)?\s*(EST|EDT|PST|PDT|CST|CDT|MST|MDT|UTC|GMT)?/i);
+    if (mmddyyyyTime) {
+      const month = parseInt(mmddyyyyTime[1], 10);
+      const day = parseInt(mmddyyyyTime[2], 10);
+      let year = parseInt(mmddyyyyTime[3], 10);
+      let hours = parseInt(mmddyyyyTime[4], 10);
+      const minutes = parseInt(mmddyyyyTime[5], 10);
+      const seconds = parseInt(mmddyyyyTime[6] || '0', 10);
+      const ampm = (mmddyyyyTime[7] || '').toUpperCase();
+      
+      // Handle 2-digit year
+      if (year < 100) {
+        year = year <= 50 ? 2000 + year : 1900 + year;
+      }
+      
+      // Convert 12-hour to 24-hour format
+      if (ampm === 'PM' && hours !== 12) {
+        hours += 12;
+      } else if (ampm === 'AM' && hours === 12) {
+        hours = 0;
+      }
+      
+      // Validate
+      if (month >= 1 && month <= 12 && day >= 1 && day <= 31 && 
+          hours >= 0 && hours <= 23 && minutes >= 0 && minutes <= 59 && seconds >= 0 && seconds <= 59) {
+        // Parse the eLocal date string, extract the components,
+        // and format them as YYYY-MM-DDTHH:mm:ss, treating the time as EST
+        // eLocal sends EST time, we store it as EST time (no conversion needed)
+        return `${year}-${String(month).padStart(2, '0')}-${String(day).padStart(2, '0')}T${String(hours).padStart(2, '0')}:${String(minutes).padStart(2, '0')}:${String(seconds).padStart(2, '0')}`;
+      }
+    }
+    
+    // If it's already in ISO format (YYYY-MM-DDTHH:mm:ss), return as-is
+    // This assumes it's already in EST
+    const isoFullMatch = trimmed.match(/^(\d{4})-(\d{2})-(\d{2})T(\d{2}):(\d{2}):(\d{2})/);
+    if (isoFullMatch) {
+      return trimmed.substring(0, 19); // Return first 19 chars (YYYY-MM-DDTHH:mm:ss)
+    }
+    
+    // Try YYYY-MM-DD format (date only)
+    const yyyymmdd = trimmed.match(/^(\d{4})-(\d{2})-(\d{2})$/);
+    if (yyyymmdd) {
+      const year = parseInt(yyyymmdd[1], 10);
+      const month = parseInt(yyyymmdd[2], 10);
+      const day = parseInt(yyyymmdd[3], 10);
+      if (month >= 1 && month <= 12 && day >= 1 && day <= 31) {
+        return `${year}-${String(month).padStart(2, '0')}-${String(day).padStart(2, '0')}T00:00:00`;
+      }
+    }
+    
+    // Try MM/DD/YYYY format (date only)
+    const mmddyyyy = trimmed.match(/^(\d{1,2})\/(\d{1,2})\/(\d{4})$/);
+    if (mmddyyyy) {
+      const month = parseInt(mmddyyyy[1], 10);
+      const day = parseInt(mmddyyyy[2], 10);
+      const year = parseInt(mmddyyyy[3], 10);
+      if (month >= 1 && month <= 12 && day >= 1 && day <= 31) {
+        return `${year}-${String(month).padStart(2, '0')}-${String(day).padStart(2, '0')}T00:00:00`;
+      }
+    }
+    
+    // If all else fails, return null
+    return null;
+  } catch (error) {
+    console.error(`[convertElocalDateToEST] Error converting date: ${elocalDateStr}`, error);
+    return null;
+  }
+};
+
+/**
  * Normalize date string to ISO format (YYYY-MM-DDTHH:mm:ss)
  * Preserves time information if available, otherwise uses midnight (00:00:00)
  * Handles various input formats:
@@ -13,15 +127,23 @@
  * - ISO strings (e.g., "2025-11-18T12:30:00.000Z") -> "2025-11-18T12:30:00"
  * - Date objects
  * 
- * IMPORTANT: For eLocal data, dates are saved EXACTLY as received without timezone conversion.
- * If eLocal sends "11/18/25 04:38 PM EST", we save it as "2025-11-18T16:38:00" (just convert 12-hour to 24-hour).
- * We do NOT convert the time to a different timezone - we preserve the time as-is from eLocal.
+ * IMPORTANT: For eLocal data, dates are saved in EST timezone.
+ * If eLocal sends "11/18/25 04:38 PM EST", we save it as "2025-11-18T16:38:00" (EST time).
+ * We explicitly treat eLocal dates as EST to avoid timezone conversion issues.
  * 
  * @param {string|Date} dateInput - Date in various formats (assumed to be EST for eLocal data)
  * @param {boolean} isElocalData - If true, treats the date as EST timezone (default: true)
  * @returns {string|null} - Normalized date+time in ISO format or null if invalid
  */
 export const normalizeDateTime = (dateInput, isElocalData = true) => {
+  // For eLocal data, use the explicit EST conversion function
+  if (isElocalData && dateInput) {
+    const converted = convertElocalDateToEST(dateInput);
+    if (converted) {
+      return converted;
+    }
+    // If conversion fails, fall through to standard parsing below
+  }
   if (!dateInput) return null;
   
   // If it's already a Date object
@@ -58,11 +180,12 @@ export const normalizeDateTime = (dateInput, isElocalData = true) => {
     }
   }
   
-  // Try MM/DD/YY or MM/DD/YYYY with time (e.g., "11/18/25 04:38 PM EST" or "11/18/2025 02:30:45 PM EST")
+  // Try MM/DD/YY or MM/DD/YYYY with time (e.g., "11/18/25 04:38 PM EST" or "12/ 2/25 09:27 AM EST")
   // This is the format used by eLocal API (EST timezone)
   // IMPORTANT: We do NOT convert timezone - we save the time as-is from eLocal
-  // eLocal format: "11/18/25 04:38 PM EST" -> "2025-11-18T16:38:00"
-  const mmddyyyyTime = trimmed.match(/^(\d{1,2})\/(\d{1,2})\/(\d{2,4})\s+(\d{1,2}):(\d{2})(?::(\d{2}))?\s*(AM|PM)?\s*(EST|EDT|PST|PDT|CST|CDT|MST|MDT|UTC|GMT)?/i);
+  // eLocal format: "11/18/25 04:38 PM EST" or "12/ 2/25 09:27 AM EST" (note: spaces after / are possible)
+  // -> "2025-11-18T16:38:00" or "2025-12-02T09:27:00"
+  const mmddyyyyTime = trimmed.match(/^(\d{1,2})\s*\/\s*(\d{1,2})\s*\/\s*(\d{2,4})\s+(\d{1,2}):(\d{2})(?::(\d{2}))?\s*(AM|PM)?\s*(EST|EDT|PST|PDT|CST|CDT|MST|MDT|UTC|GMT)?/i);
   if (mmddyyyyTime) {
     const month = parseInt(mmddyyyyTime[1], 10);
     const day = parseInt(mmddyyyyTime[2], 10);
@@ -134,6 +257,18 @@ export const normalizeDateTime = (dateInput, isElocalData = true) => {
   }
   
   // Try parsing as Date object (fallback)
+  // IMPORTANT: For eLocal data, we should NOT use this fallback because it will
+  // interpret the date in the server's local timezone, not EST
+  // If we reach here for eLocal data, it means convertElocalDateToEST failed
+  // and none of the patterns above matched, so we should return null
+  if (isElocalData) {
+    // For eLocal data, if we can't parse it properly above, return null
+    // This ensures we don't save incorrect timezone data
+    console.warn(`[Date Normalizer] Could not parse eLocal date: ${trimmed}. Returning null to avoid timezone issues.`);
+    return null;
+  }
+  
+  // For non-eLocal data, use standard Date parsing as fallback
   try {
     const date = new Date(trimmed);
     if (!isNaN(date.getTime())) {
@@ -229,31 +364,5 @@ export const convertRingbaDateToEST = (ringbaDateStr) => {
     // If conversion fails, return normalized date as-is
     return normalizeDateTime(ringbaDateStr, false);
   }
-};
-
-/**
- * Check if a date is in Daylight Saving Time (DST) for Eastern Time
- * DST runs from second Sunday in March (2 AM EST) to first Sunday in November (2 AM EST)
- * 
- * @param {Date} date - Date to check (in UTC)
- * @returns {boolean} - True if date is in DST (EDT), false if EST
- */
-const isDateInDST = (date) => {
-  const year = date.getUTCFullYear();
-  
-  // Find second Sunday in March at 2 AM EST (7 AM UTC)
-  const march1 = new Date(Date.UTC(year, 2, 1)); // March 1
-  const march1Day = march1.getUTCDay(); // 0 = Sunday, 1 = Monday, etc.
-  const daysToSecondSunday = (7 - march1Day) % 7 + 7; // Days to second Sunday
-  const dstStart = new Date(Date.UTC(year, 2, 1 + daysToSecondSunday, 7, 0, 0)); // 2 AM EST = 7 AM UTC
-  
-  // Find first Sunday in November at 2 AM EST (7 AM UTC)
-  const nov1 = new Date(Date.UTC(year, 10, 1)); // November 1
-  const nov1Day = nov1.getUTCDay();
-  const daysToFirstSunday = (7 - nov1Day) % 7; // Days to first Sunday
-  const dstEnd = new Date(Date.UTC(year, 10, 1 + daysToFirstSunday, 7, 0, 0)); // 2 AM EST = 7 AM UTC
-  
-  // DST is active if date is >= dstStart and < dstEnd
-  return date >= dstStart && date < dstEnd;
 };
 
