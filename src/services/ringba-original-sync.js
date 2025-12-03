@@ -411,9 +411,19 @@ export const syncRingbaOriginalPayout = async (config, dateRange, category = nul
   const db = dbOps(config);
   
   // Parse date range
-  const startDate = new Date(dateRange.startDate);
-  const endDate = new Date(dateRange.endDate);
-  endDate.setHours(23, 59, 59, 999); // End of day
+  // IMPORTANT: Ringba API uses UTC timestamps, but we want to fetch all calls for the target date
+  // Since the target date is in EST, we need to query a wider UTC range to cover the full EST day
+  // EST is UTC-5, so Dec 2 EST (00:00-23:59) = Dec 2 05:00 UTC to Dec 3 04:59 UTC
+  const targetDate = new Date(dateRange.startDate);
+  const targetYear = targetDate.getFullYear();
+  const targetMonth = targetDate.getMonth();
+  const targetDay = targetDate.getDate();
+  
+  // Create UTC date range that covers the full EST day
+  // EST midnight (00:00 EST) = 05:00 UTC (same day)
+  // EST end of day (23:59:59 EST) = 04:59:59 UTC (next day)
+  const startDate = new Date(Date.UTC(targetYear, targetMonth, targetDay, 5, 0, 0, 0)); // 05:00 UTC = 00:00 EST
+  const endDate = new Date(Date.UTC(targetYear, targetMonth, targetDay + 1, 4, 59, 59, 999)); // 04:59:59 UTC next day = 23:59:59 EST
   
   const categoryLabel = category ? ` (${category} category)` : ' (all categories)';
   
