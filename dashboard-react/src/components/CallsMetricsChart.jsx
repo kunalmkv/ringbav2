@@ -244,3 +244,4 @@ const CallsMetricsChart = ({ data, showLast15Days = true }) => {
 
 export default CallsMetricsChart;
 
+

@@ -151,3 +151,4 @@ You can schedule regular syncs using cron or a scheduler. For example, to sync y
 - Google Ads spend updates automatically recalculate dependent metrics
 - The sync service handles missing data gracefully (defaults to 0)
 
+

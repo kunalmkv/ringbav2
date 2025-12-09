@@ -310,3 +310,4 @@ chmod +x deploy-frontend-to-nginx.sh
 5. **Vite creates new filenames** - if you see same filename, files weren't copied
 6. **Check Network tab** in browser DevTools to verify new files are loading
 
+

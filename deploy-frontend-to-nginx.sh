@@ -149,3 +149,4 @@ echo "  curl -I http://localhost/ringba-sync-dashboard/"
 echo "  ls -la $NGINX_DIR/assets/"
 echo ""
 
+

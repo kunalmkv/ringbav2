@@ -8,15 +8,13 @@ This scheduler automatically runs the Payout Comparison Sync service multiple ti
 
 ## Overview
 
-The Payout Comparison Sync service calculates and stores payout comparison data (Ringba vs eLocal) in the `payout_comparison_daily` table for the **past 15 days**. This data is used for reporting and analysis.
+The Payout Comparison Sync service calculates and stores payout comparison data (Ringba vs eLocal) in the `payout_comparison_daily` table for the **past 15 days INCLUDING today**. This data is used for reporting and analysis.
 
 ### Date Range Logic
 
-The service syncs **past 15 days** (excluding today) based on IST timezone:
-- **If time in IST is before 12 PM (12:00)**: Considers "today" as the **previous IST day**
-- **If time in IST is 12 PM (12:00) or later**: Considers "today" as the **current IST day**
-
-The end date is always "yesterday" relative to the calculated "today", and the start date is 14 days before the end date (15 days total including the end date).
+The service syncs **past 15 days INCLUDING today** based on IST timezone:
+- End date: **today (IST)** always
+- Start date: 14 days before end date (15 days total including end date)
 
 ### Timezone Logic
 

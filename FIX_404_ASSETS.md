@@ -135,3 +135,4 @@ sudo journalctl -u ringba-dashboard -n 20
 curl http://localhost:3000/ringba-sync-dashboard/ | grep assets
 ```
 
+

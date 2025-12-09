@@ -244,3 +244,4 @@ chmod +x deploy-frontend.sh
 - Build output goes to `dashboard-build/` (configured in `vite.config.js`)
 - Server serves from `dashboard-build/` (configured in `dashboard-server.js`)
 
+

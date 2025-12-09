@@ -475,3 +475,4 @@ If you encounter issues:
 4. Ensure backend is running on port 3000
 5. Test each component individually
 
+

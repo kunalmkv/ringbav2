@@ -11,11 +11,9 @@
  * - 6:30 AM IST (06:30)
  * 
  * The service calculates and stores payout comparison data (Ringba vs eLocal)
- * in the payout_comparison_daily table for the past 15 days (IST timezone-aware).
+ * in the payout_comparison_daily table for the past 15 days INCLUDING today (IST timezone-aware).
  * 
- * IMPORTANT: The service syncs past 15 days excluding today, based on IST timezone.
- * If it runs before 12:00 PM IST, it considers "today" as the previous IST day.
- * If it runs after 12:00 PM IST, it considers "today" as the current IST day.
+ * IMPORTANT: The service syncs past 15 days including today (IST timezone).
  * 
  * Usage:
  *   node start-payout-comparison-scheduler.js
@@ -29,10 +27,7 @@ import { fileURLToPath } from 'url';
 import { dirname, join } from 'path';
 import dotenv from 'dotenv';
 import { syncPayoutComparisonForDateRange } from './src/services/payout-comparison-sync.js';
-import {
-  getPast15DaysRangeForHistorical,
-  getDateRangeDescription
-} from './src/utils/date-utils.js';
+import { getDateRangeDescription } from './src/utils/date-utils.js';
 import {
   initFileLogger,
   setupConsoleLogging,
@@ -62,39 +57,58 @@ const getISTTime = () => {
 };
 
 /**
- * Get date range for payout comparison sync (past 15 days, IST timezone-aware)
- * Uses getPast15DaysRangeForHistorical which:
- * - Gets past 15 days EXCLUDING the current date (ends at yesterday based on IST)
- * - Is timezone-independent (uses IST regardless of server location)
- * - Handles midnight edge case:
- *   - Before 12:00 PM IST: considers "today" as the previous IST day
- *   - After 12:00 PM IST: considers "today" as the current IST day
- * 
- * Returns object with startDate and endDate in YYYY-MM-DD format
+ * Get date range for payout comparison sync (past 15 days INCLUDING today, IST timezone-aware)
+ * Always includes today's IST date as the end date (no noon cut-off).
  */
 const getPayoutComparisonDateRange = () => {
-  // Get past 15 days range (IST-aware, excludes today)
-  const dateRangeObj = getPast15DaysRangeForHistorical();
-  
-  // Convert Date objects to YYYY-MM-DD format
-  const startDate = dateRangeObj.startDate.getUTCFullYear() + '-' +
-    String(dateRangeObj.startDate.getUTCMonth() + 1).padStart(2, '0') + '-' +
-    String(dateRangeObj.startDate.getUTCDate()).padStart(2, '0');
-  
-  const endDate = dateRangeObj.endDate.getUTCFullYear() + '-' +
-    String(dateRangeObj.endDate.getUTCMonth() + 1).padStart(2, '0') + '-' +
-    String(dateRangeObj.endDate.getUTCDate()).padStart(2, '0');
-  
-  // Debug logging
-  console.log(`[PayoutComparisonScheduler] Date Range Calculation:`);
-  console.log(`  - Date Range: ${getDateRangeDescription(dateRangeObj)}`);
-  console.log(`  - Start Date: ${startDate} (YYYY-MM-DD)`);
-  console.log(`  - End Date: ${endDate} (YYYY-MM-DD)`);
-  
-  return {
+  // Current IST date components
+  const now = new Date();
+  const istString = now.toLocaleString('en-US', {
+    timeZone: 'Asia/Kolkata',
+    year: 'numeric',
+    month: '2-digit',
+    day: '2-digit',
+    hour: '2-digit',
+    minute: '2-digit',
+    second: '2-digit',
+    hour12: false
+  });
+
+  const match = istString.match(/(\d{2})\/(\d{2})\/(\d{4}), (\d{2}):(\d{2}):(\d{2})/);
+  if (!match) {
+    throw new Error('Failed to parse IST time for payout comparison date range');
+  }
+
+  const month = parseInt(match[1], 10);
+  const day = parseInt(match[2], 10);
+  const year = parseInt(match[3], 10);
+
+  // End date = today (IST) at 00:00:00 UTC representation of that calendar day
+  const endDate = new Date(Date.UTC(year, month - 1, day, 0, 0, 0, 0));
+  // Start date = 14 days before end date (inclusive → 15 days total)
+  const startDate = new Date(endDate);
+  startDate.setUTCDate(startDate.getUTCDate() - 14);
+
+  const startDateStr = `${startDate.getUTCFullYear()}-${String(startDate.getUTCMonth() + 1).padStart(2, '0')}-${String(startDate.getUTCDate()).padStart(2, '0')}`;
+  const endDateStr = `${endDate.getUTCFullYear()}-${String(endDate.getUTCMonth() + 1).padStart(2, '0')}-${String(endDate.getUTCDate()).padStart(2, '0')}`;
+
+  // Build dateRangeObj compatible with getDateRangeDescription
+  const dateRangeObj = {
     startDate,
     endDate,
-    dateRangeObj // Keep original for logging
+    startDateFormatted: `${String(startDate.getUTCMonth() + 1).padStart(2, '0')}/${String(startDate.getUTCDate()).padStart(2, '0')}/${startDate.getUTCFullYear()}`,
+    endDateFormatted: `${String(endDate.getUTCMonth() + 1).padStart(2, '0')}/${String(endDate.getUTCDate()).padStart(2, '0')}/${endDate.getUTCFullYear()}`
+  };
+
+  console.log(`[PayoutComparisonScheduler] Date Range Calculation:`);
+  console.log(`  - Date Range: ${getDateRangeDescription(dateRangeObj)}`);
+  console.log(`  - Start Date: ${startDateStr} (YYYY-MM-DD)`);
+  console.log(`  - End Date: ${endDateStr} (YYYY-MM-DD)`);
+
+  return {
+    startDate: startDateStr,
+    endDate: endDateStr,
+    dateRangeObj
   };
 };
 
@@ -415,9 +429,9 @@ const main = async () => {
   console.log('The service calculates and stores payout comparison data');
   console.log('(Ringba vs eLocal) in the payout_comparison_daily table.');
   console.log('');
-  console.log('Date Range: Past 15 days (IST timezone-aware, excludes today)');
-  console.log('Timezone Logic: Before 12 PM IST → previous day as "today"');
-  console.log('                After 12 PM IST → current day as "today"');
+  console.log('Date Range: Past 15 days INCLUDING today (IST timezone-aware)');
+  console.log('Timezone Logic: Before 12 PM IST → previous day as end date');
+  console.log('                After 12 PM IST → includes today as end date');
   console.log('='.repeat(70));
   
   const scheduler = new PayoutComparisonScheduler();

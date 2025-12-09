@@ -530,3 +530,4 @@ If you encounter issues:
 - Regular updates require rebuilding and uploading the frontend
 - Database connection must be accessible from the server
 
+

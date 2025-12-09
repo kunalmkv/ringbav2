@@ -20,11 +20,10 @@
  *   - YYYY-MM-DD (e.g., 2025-12-02)
  *   - MM/DD/YYYY (e.g., 12/02/2025)
  *   - DD-MM-YYYY (e.g., 02-12-2025)
- *   - past15days (IST-aware, past 15 days excluding today)
+ *   - past15days (IST-aware, past 15 days including today)
  */
 
 import { syncPayoutComparisonForDate, syncPayoutComparisonForDateRange } from './src/services/payout-comparison-sync.js';
-import { getPast15DaysRangeForHistorical } from './src/utils/date-utils.js';
 import pg from 'pg';
 import dotenv from 'dotenv';
 import { fileURLToPath } from 'url';
@@ -76,16 +75,30 @@ const main = async () => {
   
   let startDate, endDate;
   
-  // Handle "past15days" keyword
+  // Handle "past15days" keyword - always includes today (IST) as end date
   if (args[0].toLowerCase() === 'past15days') {
-    const dateRangeObj = getPast15DaysRangeForHistorical();
-    startDate = dateRangeObj.startDate.getUTCFullYear() + '-' +
-      String(dateRangeObj.startDate.getUTCMonth() + 1).padStart(2, '0') + '-' +
-      String(dateRangeObj.startDate.getUTCDate()).padStart(2, '0');
-    endDate = dateRangeObj.endDate.getUTCFullYear() + '-' +
-      String(dateRangeObj.endDate.getUTCMonth() + 1).padStart(2, '0') + '-' +
-      String(dateRangeObj.endDate.getUTCDate()).padStart(2, '0');
-    console.log(`[Sync] Using past 15 days range: ${startDate} to ${endDate}`);
+    const now = new Date();
+    const istString = now.toLocaleString('en-US', {
+      timeZone: 'Asia/Kolkata',
+      year: 'numeric',
+      month: '2-digit',
+      day: '2-digit',
+      hour12: false
+    });
+    const match = istString.match(/(\d{2})\/(\d{2})\/(\d{4}), (\d{2}):(\d{2})/);
+    if (!match) {
+      console.error('Failed to parse IST time for past15days range');
+      process.exit(1);
+    }
+    const month = parseInt(match[1], 10);
+    const day = parseInt(match[2], 10);
+    const year = parseInt(match[3], 10);
+    const endDateObj = new Date(Date.UTC(year, month - 1, day, 0, 0, 0, 0));
+    const startDateObj = new Date(endDateObj);
+    startDateObj.setUTCDate(startDateObj.getUTCDate() - 14);
+    startDate = `${startDateObj.getUTCFullYear()}-${String(startDateObj.getUTCMonth() + 1).padStart(2, '0')}-${String(startDateObj.getUTCDate()).padStart(2, '0')}`;
+    endDate = `${endDateObj.getUTCFullYear()}-${String(endDateObj.getUTCMonth() + 1).padStart(2, '0')}-${String(endDateObj.getUTCDate()).padStart(2, '0')}`;
+    console.log(`[Sync] Using past 15 days range (includes today): ${startDate} to ${endDate}`);
   } else {
     // Handle date range format: "2025-11-01:2025-11-30"
     if (args[0].includes(':')) {

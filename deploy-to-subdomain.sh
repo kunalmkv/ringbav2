@@ -93,3 +93,4 @@ echo "   curl https://$SUBDOMAIN/api/health"
 echo ""
 echo -e "${YELLOW}For detailed instructions, see SUBDOMAIN_DEPLOYMENT_GUIDE.md${NC}"
 
+

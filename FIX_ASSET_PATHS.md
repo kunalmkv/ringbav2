@@ -75,3 +75,4 @@ After rebuilding, check:
 2. Network tab - assets load with 200 status
 3. Dashboard displays correctly
 
+

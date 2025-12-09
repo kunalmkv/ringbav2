@@ -90,3 +90,4 @@ If you still see 404 errors:
 4. **Verify file permissions**: `/var/www/ringba-sync-dashboard` should be readable by nginx user
 5. **Clear browser cache**: Hard refresh (Ctrl+Shift+R or Cmd+Shift+R)
 
+
