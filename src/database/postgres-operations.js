@@ -492,6 +492,54 @@ export const dbOps = (config) => {
       }
     },
     
+    // Get call by ID (for fetching current payout before update)
+    async getCallById(callId) {
+      try {
+        const query = `
+          SELECT id, caller_id, date_of_call, payout, category, unmatched
+          FROM elocal_call_data
+          WHERE id = $1
+        `;
+        const result = await pool.query(query, [callId]);
+        return result.rows[0] || null;
+      } catch (error) {
+        console.error('[ERROR] Failed to get call by ID:', error);
+        throw error;
+      }
+    },
+    
+    // Update existing call with adjustment (only payout and adjustment fields)
+    async updateCallWithAdjustment(callId, adjustmentData) {
+      try {
+        const query = `
+          UPDATE elocal_call_data
+          SET 
+            payout = $1,
+            adjustment_time = $2,
+            adjustment_amount = $3,
+            adjustment_classification = $4,
+            adjustment_duration = $5,
+            unmatched = $6,
+            updated_at = NOW()
+          WHERE id = $7
+          RETURNING id;
+        `;
+        const result = await pool.query(query, [
+          adjustmentData.payout || 0,
+          adjustmentData.adjustmentTime || null,
+          adjustmentData.adjustmentAmount || null,
+          adjustmentData.adjustmentClassification || null,
+          adjustmentData.adjustmentDuration || null,
+          false, // Set unmatched to false when adjustment is matched
+          callId
+        ]);
+        return { updated: result.rowCount || 0 };
+      } catch (error) {
+        console.error('[ERROR] Failed to update call with adjustment:', error);
+        throw error;
+      }
+    },
+    
     // Insert Ringba calls in batch (upsert by inbound_call_id)
     async insertRingbaCallsBatch(ringbaCalls) {
       if (!ringbaCalls || ringbaCalls.length === 0) {

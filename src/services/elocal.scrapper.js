@@ -103,6 +103,10 @@ export const scrapeElocalDataWithDateRange = (config) => (dateRange) => (service
         // For API category: No adjustments to merge
         let callsMerged = processedCalls;
         
+        // Initialize dbCallMatches map (will be used later for counting and filtering)
+        // Declared outside if block so it's accessible later
+        let dbCallMatches = new Map();
+        
         // Ensure category is preserved for API category (no merge needed)
         if (!includeAdjustments) {
           // For API category, ensure all calls have category set
@@ -117,43 +121,98 @@ export const scrapeElocalDataWithDateRange = (config) => (dateRange) => (service
         }
         
         if (includeAdjustments && processedAdjustments.length > 0) {
-          // Fuzzy merge: same caller_id and within ±60 minutes on same day
+          // Fuzzy merge: same caller_id and within ±30 minutes on same day
+          // FIXED: Now also matches against existing calls in database
           const toDate = (s) => { try { return new Date(s); } catch { return null; } };
-          const sameDay = (d1, d2) => d1 && d2 && d1.toISOString().substring(0,10) === d2.toISOString().substring(0,10);
+          // FIXED: Compare date parts directly from strings to avoid timezone issues
+          const sameDay = (dateStr1, dateStr2) => {
+            if (!dateStr1 || !dateStr2) return false;
+            // Extract date part (first 10 characters: YYYY-MM-DD) directly from strings
+            const date1 = dateStr1.substring(0, 10);
+            const date2 = dateStr2.substring(0, 10);
+            return date1 === date2;
+          };
           const diffMinutes = (d1, d2) => Math.abs(d1.getTime() - d2.getTime()) / 60000;
           const WINDOW_MIN = 30;
 
+          // Step 1: Build map from calls in current session
           const callerToCalls = new Map();
           for (const c of processedCalls) {
             const list = callerToCalls.get(c.callerId) || [];
-            list.push({ ...c, dt: toDate(c.dateOfCall) });
+            list.push({ ...c, dt: toDate(c.dateOfCall), fromDatabase: false });
             callerToCalls.set(c.callerId, list);
           }
 
-          const matchMap = new Map(); // key: caller|date_of_call
+          // Step 2: Fetch existing calls from database for the date range and add to map
+          try {
+            console.log(`[INFO] Fetching existing calls from database for date range: ${getDateRangeDescription(dateRange)}`);
+            const existingCalls = await db.getCallsForDateRange(dateRange.startDate, dateRange.endDate, category);
+            console.log(`[INFO] Found ${existingCalls.length} existing call(s) in database for matching`);
+            
+            for (const existingCall of existingCalls) {
+              // Skip if already unmatched (those are adjustments that couldn't match before)
+              if (existingCall.unmatched) continue;
+              
+              const list = callerToCalls.get(existingCall.caller_id) || [];
+              list.push({
+                callerId: existingCall.caller_id,
+                dateOfCall: existingCall.date_of_call,
+                payout: parseFloat(existingCall.payout) || 0,
+                category: existingCall.category || category,
+                dt: toDate(existingCall.date_of_call),
+                fromDatabase: true,
+                dbId: existingCall.id, // Store database ID for updates
+                originalPayout: parseFloat(existingCall.original_payout) || null,
+                originalRevenue: parseFloat(existingCall.original_revenue) || null
+              });
+              callerToCalls.set(existingCall.caller_id, list);
+            }
+          } catch (error) {
+            console.warn('[WARN] Failed to fetch existing calls from database:', error.message);
+            console.warn('[WARN] Continuing with only current session calls for matching');
+          }
+
+          // Step 3: Match adjustments to calls (both new and existing)
+          const matchMap = new Map(); // key: caller|date_of_call -> adjustment
+          const dbCallMatches = new Map(); // key: dbId -> adjustment (for database call updates)
+          
           for (const a of processedAdjustments) {
             const adjDt = toDate(a.timeOfCall);
             const candidates = callerToCalls.get(a.callerId) || [];
             let best = null;
+            
             for (const cand of candidates) {
               if (!cand.dt || !adjDt) continue;
-              if (!sameDay(cand.dt, adjDt)) continue;
+              // FIXED: Use string comparison for sameDay check
+              if (!sameDay(cand.dateOfCall, a.timeOfCall)) continue;
               const dm = diffMinutes(cand.dt, adjDt);
               if (dm <= WINDOW_MIN) {
                 if (!best || dm < best.diff) best = { diff: dm, call: cand };
               }
             }
+            
             if (best && best.call) {
-              matchMap.set(`${best.call.callerId}|${best.call.dateOfCall}`, a);
+              if (best.call.fromDatabase) {
+                // Match with existing database call - will update separately
+                dbCallMatches.set(best.call.dbId, a);
+                console.log(`[INFO] Matched adjustment to existing database call ID ${best.call.dbId} (caller: ${a.callerId.substring(0, 10)}..., time diff: ${best.diff.toFixed(2)} min)`);
+              } else {
+                // Match with new call from current session
+                matchMap.set(`${best.call.callerId}|${best.call.dateOfCall}`, a);
+              }
             }
           }
 
+          // Step 4: Merge adjustments into new calls from current session
           callsMerged = processedCalls.map(c => {
             const a = matchMap.get(`${c.callerId}|${c.dateOfCall}`);
             if (a) {
+              // Calculate new payout: original payout + adjustment amount
+              const newPayout = (c.payout || 0) + (a.amount || 0);
               return {
                 ...c,
                 category: c.category || category, // Ensure category is preserved
+                payout: newPayout, // Update payout with adjustment
                 adjustmentTime: a.adjustmentTime,
                 adjustmentAmount: a.amount,
                 adjustmentClassification: a.classification,
@@ -165,6 +224,37 @@ export const scrapeElocalDataWithDateRange = (config) => (dateRange) => (service
               category: c.category || category // Ensure category is preserved
             };
           });
+
+          // Step 5: Update existing database calls with matched adjustments
+          if (dbCallMatches.size > 0) {
+            console.log(`[INFO] Updating ${dbCallMatches.size} existing database call(s) with adjustments`);
+            let dbUpdatesCount = 0;
+            
+            for (const [dbId, adj] of dbCallMatches.entries()) {
+              try {
+                // Fetch current call to get existing payout
+                const currentCall = await db.getCallById(dbId);
+                
+                if (currentCall) {
+                  const currentPayout = parseFloat(currentCall.payout) || 0;
+                  const newPayout = currentPayout + (adj.amount || 0);
+                  
+                  await db.updateCallWithAdjustment(dbId, {
+                    payout: newPayout, // Update payout: existing + adjustment
+                    adjustmentTime: adj.adjustmentTime,
+                    adjustmentAmount: adj.amount,
+                    adjustmentClassification: adj.classification,
+                    adjustmentDuration: adj.duration
+                  });
+                  dbUpdatesCount++;
+                }
+              } catch (error) {
+                console.warn(`[WARN] Failed to update database call ID ${dbId} with adjustment:`, error.message);
+              }
+            }
+            
+            console.log(`[SUCCESS] Updated ${dbUpdatesCount} existing database call(s) with adjustments`);
+          }
         }
 
         if (callsMerged.length > 0) {
@@ -184,24 +274,153 @@ export const scrapeElocalDataWithDateRange = (config) => (dateRange) => (service
         }
 
         // Count applied adjustments (only for STATIC category)
-        const adjustmentsApplied = includeAdjustments 
-          ? callsMerged.filter(c => c.adjustmentAmount != null).length 
-          : 0;
+        // Include both new calls and database call matches
+        let adjustmentsAppliedToNewCalls = 0;
+        let adjustmentsAppliedToDbCalls = 0;
+        
+        if (includeAdjustments) {
+          adjustmentsAppliedToNewCalls = callsMerged.filter(c => c.adjustmentAmount != null).length;
+          // dbCallMatches is defined in the matching block above, check if it exists
+          if (typeof dbCallMatches !== 'undefined' && dbCallMatches) {
+            adjustmentsAppliedToDbCalls = dbCallMatches.size;
+          }
+        }
+        
+        let adjustmentsApplied = adjustmentsAppliedToNewCalls + adjustmentsAppliedToDbCalls;
         let adjustmentsUnmatched = includeAdjustments 
           ? processedAdjustments.length - adjustmentsApplied 
           : 0;
 
-        // For unmatched adjustments, insert new rows with unmatched=true (only for STATIC category)
+        // For unmatched adjustments, try to match with existing calls in database before inserting
+        // Only insert if adjustment wasn't matched to either new calls or database calls
         if (includeAdjustments && adjustmentsUnmatched > 0) {
+          // Collect all matched adjustment keys (from both new calls and database calls)
           const matchedKeys = new Set(
             callsMerged.filter(c => c.adjustmentAmount != null)
               .map(c => `${c.callerId}|${c.dateOfCall}`)
           );
+          
+          // Filter out adjustments that were matched to database calls
+          // Create a set of matched adjustment timeOfCall values from dbCallMatches
+          const dbMatchedAdjustments = new Set();
+          if (dbCallMatches && dbCallMatches.size > 0) {
+            for (const adj of dbCallMatches.values()) {
+              dbMatchedAdjustments.add(`${adj.callerId}|${adj.timeOfCall}`);
+            }
+          }
+          
           // Import normalizeDateTime for unmatched adjustments
           const { normalizeDateTime } = await import('../utils/date-normalizer.js');
           
-          const toInsert = processedAdjustments
-            .filter(a => !Array.from(matchedKeys).some(k => k.startsWith(`${a.callerId}|`)))
+          // Helper functions for matching (same as above)
+          const toDate = (s) => { try { return new Date(s); } catch { return null; } };
+          const sameDay = (dateStr1, dateStr2) => {
+            if (!dateStr1 || !dateStr2) return false;
+            const date1 = dateStr1.substring(0, 10);
+            const date2 = dateStr2.substring(0, 10);
+            return date1 === date2;
+          };
+          const diffMinutes = (d1, d2) => Math.abs(d1.getTime() - d2.getTime()) / 60000;
+          const WINDOW_MIN = 30;
+          
+          // Get truly unmatched adjustments (not matched to new calls or already matched DB calls)
+          const trulyUnmatched = processedAdjustments.filter(a => {
+            // Skip if matched to a new call
+            const key = `${a.callerId}|${a.timeOfCall}`;
+            if (matchedKeys.has(key)) return false;
+            
+            // Skip if already matched to a database call
+            const dbKey = `${a.callerId}|${a.timeOfCall}`;
+            if (dbMatchedAdjustments.has(dbKey)) return false;
+            
+            return true;
+          });
+          
+          // Try to match truly unmatched adjustments with existing calls in database
+          // This handles cases where the call exists but wasn't in the date range we fetched earlier
+          let additionalDbMatches = 0;
+          for (const adj of trulyUnmatched) {
+            try {
+              // Search for existing calls with same caller ID and category
+              // Use a wider date range (±1 day) to catch calls that might match
+              const adjDate = toDate(adj.timeOfCall);
+              if (!adjDate) continue;
+              
+              // Search ±1 day around adjustment date to catch calls that might match
+              const searchStartDate = new Date(adjDate);
+              searchStartDate.setDate(searchStartDate.getDate() - 1);
+              searchStartDate.setHours(0, 0, 0, 0);
+              const searchEndDate = new Date(adjDate);
+              searchEndDate.setDate(searchEndDate.getDate() + 1);
+              searchEndDate.setHours(23, 59, 59, 999);
+              
+              const existingCalls = await db.getCallsForDateRange(searchStartDate, searchEndDate, category);
+              
+              // Filter to same caller ID and not already matched
+              const candidateCalls = existingCalls.filter(c => 
+                c.caller_id === adj.callerId && 
+                !c.unmatched &&
+                (!c.adjustment_amount || parseFloat(c.adjustment_amount) === 0)
+              );
+              
+              if (candidateCalls.length > 0) {
+                const adjDt = toDate(adj.timeOfCall);
+                let bestMatch = null;
+                let bestDiff = Infinity;
+                
+                for (const existingCall of candidateCalls) {
+                  const callDt = toDate(existingCall.date_of_call);
+                  if (!callDt || !adjDt) continue;
+                  
+                  // Check same day and time window
+                  if (!sameDay(existingCall.date_of_call, adj.timeOfCall)) continue;
+                  
+                  const timeDiff = diffMinutes(callDt, adjDt);
+                  if (timeDiff <= WINDOW_MIN && timeDiff < bestDiff) {
+                    bestDiff = timeDiff;
+                    bestMatch = existingCall;
+                  }
+                }
+                
+                if (bestMatch) {
+                  // Found a match! Update the existing call
+                  const currentPayout = parseFloat(bestMatch.payout) || 0;
+                  const newPayout = currentPayout + (adj.amount || 0);
+                  
+                  await db.updateCallWithAdjustment(bestMatch.id, {
+                    payout: newPayout,
+                    adjustmentTime: adj.adjustmentTime,
+                    adjustmentAmount: adj.amount,
+                    adjustmentClassification: adj.classification,
+                    adjustmentDuration: adj.duration
+                  });
+                  
+                  additionalDbMatches++;
+                  console.log(`[INFO] Matched unmatched adjustment to existing database call ID ${bestMatch.id} (caller: ${adj.callerId.substring(0, 10)}..., time diff: ${bestDiff.toFixed(2)} min)`);
+                  
+                  // Mark as matched so it won't be inserted
+                  dbMatchedAdjustments.add(`${adj.callerId}|${adj.timeOfCall}`);
+                }
+              }
+            } catch (error) {
+              console.warn(`[WARN] Failed to search for matching call for adjustment (caller: ${adj.callerId.substring(0, 10)}...):`, error.message);
+            }
+          }
+          
+          if (additionalDbMatches > 0) {
+            console.log(`[INFO] Matched ${additionalDbMatches} additional adjustment(s) to existing database calls`);
+            // Update counts
+            adjustmentsApplied += additionalDbMatches;
+            adjustmentsUnmatched -= additionalDbMatches;
+          }
+          
+          // Now insert only adjustments that still couldn't be matched
+          const toInsert = trulyUnmatched
+            .filter(a => {
+              // Skip if we just matched it to a database call
+              const dbKey = `${a.callerId}|${a.timeOfCall}`;
+              return !dbMatchedAdjustments.has(dbKey);
+            })
             .map(a => ({
               dateOfCall: normalizeDateTime(a.timeOfCall) || a.timeOfCall, // Normalize date+time
               campaignPhone: a.campaignPhone,
@@ -214,10 +433,13 @@ export const scrapeElocalDataWithDateRange = (config) => (dateRange) => (service
               adjustmentDuration: a.duration,
               unmatched: true
             }));
+          
           if (toInsert.length > 0) {
             try {
+              // Before inserting, check if any of these would update an existing call
+              // insertCallsBatch will handle the upsert, but we want to log it properly
               const ins = await db.insertCallsBatch(toInsert);
-              console.log(`[INFO] Inserted ${ins.inserted || 0} unmatched adjustment rows as new calls`);
+              console.log(`[INFO] Inserted ${ins.inserted || 0} unmatched adjustment rows as new calls, updated ${ins.updated || 0} existing`);
             } catch (error) {
               console.error('[ERROR] Failed to insert unmatched adjustments:', error.message);
             }
