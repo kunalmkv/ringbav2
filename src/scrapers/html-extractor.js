@@ -21,6 +21,7 @@ export const extractCampaignCallsFromHtml = (html) => {
     const dateIndex = headers.findIndex(h => /(Date|Time)/i.test(h));
     let callerIdIndex = headers.findIndex(h => /Caller ID/i.test(h));
     let campaignPhoneIndex = headers.findIndex(h => /(Campaign Phone|Campaign Ph)/i.test(h));
+    const durationIndex = headers.findIndex(h => /Duration/i.test(h));
     if (callerIdIndex === -1 && campaignPhoneIndex === -1) {
       const combinedIndex = headers.findIndex(h => /Campaign Phone/i.test(h) && /Caller ID/i.test(h));
       if (combinedIndex !== -1) {
@@ -30,7 +31,13 @@ export const extractCampaignCallsFromHtml = (html) => {
     }
 
     callsTable = tables[i];
-    headerMap = { dateIndex: dateIndex !== -1 ? dateIndex : 0, callerIdIndex, campaignPhoneIndex, payoutIndex };
+    headerMap = { 
+      dateIndex: dateIndex !== -1 ? dateIndex : 0, 
+      callerIdIndex, 
+      campaignPhoneIndex, 
+      payoutIndex,
+      durationIndex: durationIndex !== -1 ? durationIndex : 3 // Default to index 3 if not found
+    };
     break;
   }
 
@@ -47,7 +54,7 @@ export const extractCampaignCallsFromHtml = (html) => {
     // Derive other columns by header guesses
     const callerCol = headerMap.callerIdIndex !== -1 ? cells[headerMap.callerIdIndex] || '' : '';
     const categoryCol = cells[2] || '';
-    const durationCol = cells[3] || '';
+    const durationCol = headerMap.durationIndex !== -1 ? cells[headerMap.durationIndex] || '' : (cells[3] || '');
     const assessmentCol = cells[5] || '';
 
     let callerId = '';
@@ -78,13 +85,138 @@ export const extractCampaignCallsFromHtml = (html) => {
     const cityState = catLines[1] || '';
     const zipCode = catLines[2] || '';
 
-    // Parse durations: "screen, post, total"
+    // Parse durations: "screen, post, total" or "MM:SS" format
+    // Format can be:
+    // 1. "126, 1017, 1143" (three comma-separated numbers: screen, post, total in seconds)
+    // 2. "19:03" (time format: MM:SS, convert to total seconds = 1143)
+    // 3. "126\n1017\n1143" (three newline-separated numbers)
+    // 4. "2:06" (time format: MM:SS, convert to total seconds = 126)
     let screenDuration = null, postScreenDuration = null, totalDuration = null;
-    const durNums = durationCol.split(/[,\n]/).map(s => parseInt(s.trim())).filter(n => !Number.isNaN(n));
-    if (durNums.length >= 3) {
-      screenDuration = durNums[0];
-      postScreenDuration = durNums[1];
-      totalDuration = durNums[2];
+    
+    
+    // First, check if it's in MM:SS format (time format) - matches "19:03" or "2:06"
+    const timeFormatMatch = durationCol.match(/^(\d{1,2}):(\d{2})$/);
+    if (timeFormatMatch) {
+      // Convert MM:SS to total seconds
+      const minutes = parseInt(timeFormatMatch[1], 10);
+      const seconds = parseInt(timeFormatMatch[2], 10);
+      totalDuration = (minutes * 60) + seconds;
+      // For time format, we only have total duration
+      screenDuration = null;
+      postScreenDuration = null;
+    } else {
+      // Try to parse as comma/newline separated numbers
+      // Format can be: "17\n1,126\n1,143" where:
+      // - Line 1: screen duration (17)
+      // - Line 2: post duration (1) and something (126) - might be subtotal
+      // - Line 3: something (1) and total (143) - but "1,143" should be parsed as 1143, not [1, 143]
+      
+      // First, split by newlines to get lines
+      const lines = durationCol.split(/\n+/).map(s => s.trim()).filter(s => s.length > 0);
+      const durNums = [];
+      
+      for (const line of lines) {
+        // Check if line is in MM:SS format first
+        const timeMatch = line.match(/^(\d{1,2}):(\d{2})$/);
+        if (timeMatch) {
+          const min = parseInt(timeMatch[1], 10);
+          const sec = parseInt(timeMatch[2], 10);
+          const totalSec = (min * 60) + sec;
+          durNums.push(totalSec);
+          continue;
+        }
+        
+        // Check if line contains comma - could be thousands separator or multiple numbers
+        if (line.includes(',')) {
+          const commaParts = line.split(',').map(s => s.trim());
+          const withoutCommas = line.replace(/,/g, '');
+          const asSingleNum = parseInt(withoutCommas, 10);
+          const lastPart = parseInt(commaParts[commaParts.length - 1], 10);
+          
+          // Determine if comma is thousands separator or value separator:
+          // Pattern analysis for "17\n1,126\n1,143":
+          // - "1,126": lastPart=126 (>= 100), asSingleNum=1126 (>= 1000) -> could be 1126 OR [1, 126]
+          // - "1,143": lastPart=143 (>= 100), asSingleNum=1143 (>= 1000) -> should be 1143 (total duration)
+          //
+          // Strategy: If the number without commas is >= 1000 AND it's on the LAST line, 
+          // treat it as thousands separator (total duration). Otherwise, split by comma.
+          const isLastLine = lines.indexOf(line) === lines.length - 1;
+          
+          if (isLastLine && !Number.isNaN(asSingleNum) && asSingleNum >= 1000 && asSingleNum < 36000 && lastPart >= 100) {
+            // Last line with comma and number >= 1000: treat as total duration with thousands separator
+            // Example: "1,143" on last line = 1143 (total)
+            durNums.push(asSingleNum);
+          } else {
+            // Not last line, or doesn't meet criteria: treat comma as separator
+            // Example: "1,126" on middle line = [1, 126] (post and intermediate)
+            const parts = commaParts.map(s => {
+              const num = parseInt(s, 10);
+              return Number.isNaN(num) ? null : num;
+            }).filter(n => n !== null);
+            durNums.push(...parts);
+          }
+        } else {
+          // No comma, just parse as single number
+          const num = parseInt(line, 10);
+          if (!Number.isNaN(num)) {
+            durNums.push(num);
+          }
+        }
+      }
+      
+      // Now determine screen, post, and total from parsed numbers
+      // Format patterns:
+      // 1. "17\n1,126\n1,143" -> [17, 1, 126, 1, 1143] -> screen=17, post=1, total=1143
+      // 2. "17\n1\n126\n1\n143" -> [17, 1, 126, 1, 143] -> screen=17, post=1, total=143 (wrong, should be 1143)
+      // 3. "17, 1, 1143" -> [17, 1, 1143] -> screen=17, post=1, total=1143
+      
+      if (durNums.length >= 3) {
+        // Pattern: first number is usually screen, second is usually post
+        screenDuration = durNums[0];
+        postScreenDuration = durNums[1];
+        
+        // Total is usually the largest number that's >= 100 (to filter out small intermediate values)
+        // But prioritize numbers that are clearly totals (>= 1000 or the last number if it's reasonable)
+        const candidates = durNums.filter(n => n >= 100 && n < 36000);
+        
+        if (candidates.length > 0) {
+          // If we have a number >= 1000, it's likely the total (e.g., 1143)
+          const largeCandidate = candidates.find(n => n >= 1000);
+          if (largeCandidate) {
+            totalDuration = largeCandidate;
+          } else {
+            // Otherwise, use the largest candidate or the last number
+            totalDuration = Math.max(...candidates);
+            // But if last number is reasonable and larger, prefer it
+            if (durNums[durNums.length - 1] >= 100 && durNums[durNums.length - 1] > totalDuration) {
+              totalDuration = durNums[durNums.length - 1];
+            }
+          }
+        } else {
+          // Fallback: use last number
+          totalDuration = durNums[durNums.length - 1];
+        }
+        
+        // Validate: total should be >= screen + post (at minimum)
+        const minTotal = (screenDuration || 0) + (postScreenDuration || 0);
+        if (totalDuration < minTotal && minTotal > 0) {
+          // Total seems too small, might need to look for a larger number
+          const largerCandidates = durNums.filter(n => n >= minTotal && n < 36000);
+          if (largerCandidates.length > 0) {
+            totalDuration = Math.max(...largerCandidates);
+          }
+        }
+        
+      } else if (durNums.length === 1) {
+        totalDuration = durNums[0];
+        screenDuration = null;
+        postScreenDuration = null;
+      } else if (durNums.length === 2) {
+        screenDuration = durNums[0];
+        totalDuration = durNums[1];
+        postScreenDuration = totalDuration - screenDuration;
+        if (postScreenDuration < 0) postScreenDuration = null;
+      }
     }
 
     // Assessment and classification from assessmentCol (multiline)

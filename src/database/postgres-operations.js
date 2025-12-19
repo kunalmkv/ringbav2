@@ -508,6 +508,52 @@ export const dbOps = (config) => {
       }
     },
     
+    // Update ringba_inbound_call_id for a call (or batch of calls)
+    async updateRingbaInboundCallId(matches) {
+      if (!matches || matches.length === 0) {
+        return { updated: 0 };
+      }
+      
+      try {
+        let updated = 0;
+        const client = await pool.connect();
+        try {
+          await client.query('BEGIN');
+          
+          for (const match of matches) {
+            const query = `
+              UPDATE elocal_call_data
+              SET 
+                ringba_inbound_call_id = COALESCE($1, ringba_inbound_call_id),
+                updated_at = NOW()
+              WHERE id = $2
+                AND (ringba_inbound_call_id IS NULL OR ringba_inbound_call_id != $1)
+              RETURNING id;
+            `;
+            const result = await client.query(query, [
+              match.ringbaInboundCallId,
+              match.elocalCallId
+            ]);
+            
+            if (result.rows.length > 0) {
+              updated++;
+            }
+          }
+          
+          await client.query('COMMIT');
+          return { updated };
+        } catch (error) {
+          await client.query('ROLLBACK');
+          throw error;
+        } finally {
+          client.release();
+        }
+      } catch (error) {
+        console.error('[ERROR] Failed to update ringba_inbound_call_id:', error);
+        throw error;
+      }
+    },
+    
     // Update existing call with adjustment (only payout and adjustment fields)
     async updateCallWithAdjustment(callId, adjustmentData) {
       try {
