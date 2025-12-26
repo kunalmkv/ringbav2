@@ -163,7 +163,11 @@ export const scrapeElocalDataWithDateRange = (config) => (dateRange) => (service
                 fromDatabase: true,
                 dbId: existingCall.id, // Store database ID for updates
                 originalPayout: parseFloat(existingCall.original_payout) || null,
-                originalRevenue: parseFloat(existingCall.original_revenue) || null
+                originalRevenue: parseFloat(existingCall.original_revenue) || null,
+                // Store adjustment info to prevent double application
+                hasAdjustment: !!(existingCall.adjustment_amount && parseFloat(existingCall.adjustment_amount) !== 0),
+                adjustmentAmount: parseFloat(existingCall.adjustment_amount) || null,
+                adjustmentTime: existingCall.adjustment_time || null
               });
               callerToCalls.set(existingCall.caller_id, list);
             }
@@ -173,6 +177,7 @@ export const scrapeElocalDataWithDateRange = (config) => (dateRange) => (service
           }
 
           // Step 3: Match adjustments to calls (both new and existing)
+          // IMPORTANT: Only match adjustments that haven't been applied to calls yet
           const matchMap = new Map(); // key: caller|date_of_call -> adjustment
           const dbCallMatches = new Map(); // key: dbId -> adjustment (for database call updates)
           
@@ -185,6 +190,30 @@ export const scrapeElocalDataWithDateRange = (config) => (dateRange) => (service
               if (!cand.dt || !adjDt) continue;
               // FIXED: Use string comparison for sameDay check
               if (!sameDay(cand.dateOfCall, a.timeOfCall)) continue;
+              
+              // CRITICAL FIX: Skip if this existing call already has an adjustment applied
+              // This prevents double application when service runs multiple times
+              if (cand.fromDatabase && cand.hasAdjustment) {
+                // Check if this adjustment matches the one already applied
+                // Compare adjustment amount and time to see if it's the same adjustment
+                const existingAdjAmount = cand.adjustmentAmount;
+                const existingAdjTime = cand.adjustmentTime;
+                
+                // If amounts match and times are close (within 1 minute), it's the same adjustment
+                const amountMatch = Math.abs((existingAdjAmount || 0) - (a.amount || 0)) < 0.01;
+                if (amountMatch && existingAdjTime) {
+                  const existingAdjDt = toDate(existingAdjTime);
+                  if (existingAdjDt && adjDt) {
+                    const timeDiff = diffMinutes(existingAdjDt, adjDt);
+                    if (timeDiff <= 1) {
+                      // This adjustment was already applied to this call, skip it
+                      console.log(`[INFO] Skipping adjustment for call ID ${cand.dbId} - already applied (amount: $${a.amount}, time: ${a.adjustmentTime})`);
+                      continue;
+                    }
+                  }
+                }
+              }
+              
               const dm = diffMinutes(cand.dt, adjDt);
               if (dm <= WINDOW_MIN) {
                 if (!best || dm < best.diff) best = { diff: dm, call: cand };
@@ -194,11 +223,21 @@ export const scrapeElocalDataWithDateRange = (config) => (dateRange) => (service
             if (best && best.call) {
               if (best.call.fromDatabase) {
                 // Match with existing database call - will update separately
+                // Double-check: Skip if call already has this adjustment applied
+                if (best.call.hasAdjustment) {
+                  const existingAdjAmount = best.call.adjustmentAmount;
+                  const amountMatch = Math.abs((existingAdjAmount || 0) - (a.amount || 0)) < 0.01;
+                  if (amountMatch) {
+                    console.log(`[INFO] Skipping adjustment for call ID ${best.call.dbId} - adjustment already applied`);
+                    continue;
+                  }
+                }
+                
                 dbCallMatches.set(best.call.dbId, a);
                 console.log(`[INFO] Matched adjustment to existing database call ID ${best.call.dbId} (caller: ${a.callerId.substring(0, 10)}..., time diff: ${best.diff.toFixed(2)} min)`);
               } else {
                 // Match with new call from current session
-                matchMap.set(`${best.call.callerId}|${best.call.dateOfCall}`, a);
+              matchMap.set(`${best.call.callerId}|${best.call.dateOfCall}`, a);
               }
             }
           }
@@ -232,10 +271,32 @@ export const scrapeElocalDataWithDateRange = (config) => (dateRange) => (service
             
             for (const [dbId, adj] of dbCallMatches.entries()) {
               try {
-                // Fetch current call to get existing payout
+                // Fetch current call to get existing payout and adjustment info
                 const currentCall = await db.getCallById(dbId);
                 
                 if (currentCall) {
+                  // CRITICAL FIX: Check if this adjustment was already applied
+                  // Compare adjustment amount and time to prevent double application
+                  const existingAdjAmount = parseFloat(currentCall.adjustment_amount || 0);
+                  const existingAdjTime = currentCall.adjustment_time;
+                  
+                  // If call already has an adjustment, check if it's the same one
+                  if (existingAdjAmount !== 0 && existingAdjTime) {
+                    const amountMatch = Math.abs(existingAdjAmount - (adj.amount || 0)) < 0.01;
+                    if (amountMatch) {
+                      const existingAdjDt = toDate(existingAdjTime);
+                      const adjDt = toDate(adj.adjustmentTime);
+                      if (existingAdjDt && adjDt) {
+                        const timeDiff = diffMinutes(existingAdjDt, adjDt);
+                        if (timeDiff <= 1) {
+                          // This adjustment was already applied, skip it
+                          console.log(`[INFO] Skipping adjustment for call ID ${dbId} - already applied (amount: $${adj.amount}, time: ${adj.adjustmentTime})`);
+                          continue;
+                        }
+                      }
+                    }
+                  }
+                  
                   const currentPayout = parseFloat(currentCall.payout) || 0;
                   const newPayout = currentPayout + (adj.amount || 0);
                   

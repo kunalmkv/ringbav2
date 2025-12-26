@@ -452,7 +452,8 @@ export const dbOps = (config) => {
         const query = `
           SELECT 
             id, caller_id, date_of_call, payout, category,
-            original_payout, original_revenue, ringba_inbound_call_id, unmatched
+            original_payout, original_revenue, ringba_inbound_call_id, unmatched,
+            adjustment_amount, adjustment_time, adjustment_classification, adjustment_duration
           FROM elocal_call_data
           WHERE SUBSTRING(date_of_call, 1, 10) = ANY(ARRAY[${placeholders}])${categoryFilter}
           ORDER BY caller_id, date_of_call
@@ -496,7 +497,8 @@ export const dbOps = (config) => {
     async getCallById(callId) {
       try {
         const query = `
-          SELECT id, caller_id, date_of_call, payout, category, unmatched
+          SELECT id, caller_id, date_of_call, payout, category, unmatched,
+                 adjustment_amount, adjustment_time, adjustment_classification, adjustment_duration
           FROM elocal_call_data
           WHERE id = $1
         `;
