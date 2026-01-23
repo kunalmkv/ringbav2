@@ -110,7 +110,17 @@
         "timezone": "Asia/Kolkata",
         "description": "Daily at 6:00 AM IST"
       }
+    },
+    {
+      "name": "Ringba Zero-Payout Fix",
+      "type": "ringba-zero-payout",
+      "enabled": true,
+      "daysBack": 10,
+      "schedule": {
+        "time": "06:30",
+        "timezone": "Asia/Kolkata",
+        "description": "Daily at 6:30 AM IST"
+      }
     }
   ]
 }
-
