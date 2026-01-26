@@ -157,14 +157,25 @@ const executeJob = async (serviceName, serviceType, category, config) => {
     console.log('='.repeat(70));
     console.log(`[SUCCESS] ${serviceName} completed in ${duration}s`);
     console.log('='.repeat(70));
-    console.log(`  Session ID:            ${result.sessionId}`);
-    console.log(`  Date Range:            ${result.dateRange}`);
-    console.log(`  Total Calls:           ${result.summary.totalCalls}`);
-    console.log(`  Total Payout:          $${result.summary.totalPayout.toFixed(2)}`);
-    console.log(`  Unique Callers:        ${result.summary.uniqueCallers}`);
-    console.log(`  Adjustments Applied:   ${result.summary.adjustmentsApplied || 0}`);
-    console.log(`  Calls Inserted:       ${result.databaseResults.callsInserted}`);
-    console.log(`  Calls Updated:        ${result.databaseResults.callsUpdated}`);
+
+    if (serviceType === 'ringba-zero-payout') {
+      // Ringba zero-payout fix service result
+      console.log(`  Date Range:            ${result.dateRange.start} to ${result.dateRange.end}`);
+      console.log(`  Total Calls:           ${result.totalCalls}`);
+      console.log(`  Successfully Fixed:    ${result.fixed}`);
+      console.log(`  Failed:                ${result.failed}`);
+    } else {
+      // eLocal scraper service result
+      console.log(`  Session ID:            ${result.sessionId}`);
+      console.log(`  Date Range:            ${result.dateRange}`);
+      console.log(`  Total Calls:           ${result.summary.totalCalls}`);
+      console.log(`  Total Payout:          $${result.summary.totalPayout.toFixed(2)}`);
+      console.log(`  Unique Callers:        ${result.summary.uniqueCallers}`);
+      console.log(`  Adjustments Applied:   ${result.summary.adjustmentsApplied || 0}`);
+      console.log(`  Calls Inserted:       ${result.databaseResults.callsInserted}`);
+      console.log(`  Calls Updated:        ${result.databaseResults.callsUpdated}`);
+    }
+
     console.log('='.repeat(70));
     console.log('');
 
