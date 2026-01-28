@@ -40,7 +40,18 @@ app.use(cors({
   methods: ['GET', 'POST', 'PUT', 'DELETE', 'OPTIONS'],
   allowedHeaders: ['Content-Type', 'Authorization']
 }));
-app.use(express.json());
+// Body parsing
+// - For normal API routes we expect JSON.
+// - For webhook routes we must accept *non-JSON* payloads too (plain text / templates),
+//   even if the sender sets Content-Type: application/json with invalid JSON.
+const jsonParser = express.json({ limit: '2mb' });
+const textParser = express.text({ type: '*/*', limit: '2mb' });
+app.use((req, res, next) => {
+  if (req.path.startsWith('/webhook')) {
+    return textParser(req, res, next);
+  }
+  return jsonParser(req, res, next);
+});
 
 // Middleware to rewrite /ringba-sync-dashboard/api/* to /api/* before routes
 app.use((req, res, next) => {
@@ -1118,7 +1129,26 @@ app.post('/webhook/:id', async (req, res) => {
   try {
     const webhookId = req.params.id;
     const method = req.method;
-    const requestBody = req.body;
+    // req.body is text for /webhook/* (see body parsing middleware above)
+    // Try to parse as JSON if possible; otherwise store raw text safely.
+    let requestBody = req.body;
+    let storedBody = null;
+    if (typeof requestBody === 'string') {
+      const trimmed = requestBody.trim();
+      if (trimmed.length === 0) {
+        storedBody = null;
+      } else {
+        try {
+          storedBody = JSON.parse(trimmed);
+        } catch {
+          storedBody = { raw: requestBody };
+        }
+      }
+    } else if (requestBody && typeof requestBody === 'object') {
+      storedBody = requestBody;
+    } else {
+      storedBody = null;
+    }
     const headers = req.headers;
     const queryParams = req.query;
     const ipAddress = req.ip || req.connection.remoteAddress || req.headers['x-forwarded-for'] || 'unknown';
@@ -1126,7 +1156,7 @@ app.post('/webhook/:id', async (req, res) => {
     
     console.log(`[Webhook] POST /webhook/${webhookId} received`);
     console.log(`[Webhook] IP: ${ipAddress}, User-Agent: ${userAgent}`);
-    console.log(`[Webhook] Body:`, JSON.stringify(requestBody, null, 2));
+    console.log(`[Webhook] Body:`, typeof storedBody === 'string' ? storedBody : JSON.stringify(storedBody, null, 2));
     
     client = await pool.connect();
     
@@ -1142,7 +1172,7 @@ app.post('/webhook/:id', async (req, res) => {
     const result = await client.query(insertQuery, [
       webhookId,
       method,
-      JSON.stringify(requestBody),
+      storedBody === null ? null : JSON.stringify(storedBody),
       JSON.stringify(headers),
       JSON.stringify(queryParams),
       ipAddress,
