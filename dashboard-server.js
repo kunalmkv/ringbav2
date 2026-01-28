@@ -1111,7 +1111,110 @@ app.delete('/api/google-ads-spend/:date', async (req, res) => {
   }
 });
 
-// Webhook endpoints
+// ============================================================================
+// Webhook API Endpoints
+// ============================================================================
+
+// API endpoint: Get webhook requests for a specific webhook ID
+app.get('/api/webhooks/:id', async (req, res) => {
+  let client = null;
+  try {
+    const webhookId = req.params.id;
+    const { limit = 100, offset = 0 } = req.query;
+    
+    console.log(`[API] /api/webhooks/${webhookId} called`, { limit, offset });
+    
+    client = await pool.connect();
+    
+    // Get webhook requests
+    const query = `
+      SELECT 
+        id,
+        webhook_id,
+        method,
+        request_body,
+        headers,
+        query_params,
+        ip_address,
+        user_agent,
+        created_at
+      FROM webhook_requests
+      WHERE webhook_id = $1
+      ORDER BY created_at DESC
+      LIMIT $2 OFFSET $3
+    `;
+    
+    const result = await client.query(query, [webhookId, parseInt(limit), parseInt(offset)]);
+    
+    // Get total count
+    const countQuery = `SELECT COUNT(*) as total FROM webhook_requests WHERE webhook_id = $1`;
+    const countResult = await client.query(countQuery, [webhookId]);
+    const total = parseInt(countResult.rows[0].total) || 0;
+    
+    // Parse JSONB fields
+    const requests = result.rows.map(row => ({
+      id: row.id,
+      webhook_id: row.webhook_id,
+      method: row.method,
+      request_body: row.request_body,
+      headers: row.headers,
+      query_params: row.query_params,
+      ip_address: row.ip_address,
+      user_agent: row.user_agent,
+      created_at: row.created_at
+    }));
+    
+    sendJSON(res, {
+      data: requests,
+      total: total,
+      limit: parseInt(limit),
+      offset: parseInt(offset)
+    });
+  } catch (error) {
+    console.error('[API Error] Failed to fetch webhook requests:', error);
+    sendError(res, `Failed to fetch webhook requests: ${error.message}`, 500);
+  } finally {
+    if (client) client.release();
+  }
+});
+
+// API endpoint: Get all webhook IDs (for listing)
+app.get('/api/webhooks', async (req, res) => {
+  let client = null;
+  try {
+    console.log('[API] /api/webhooks called');
+    
+    client = await pool.connect();
+    
+    // Get distinct webhook IDs with their latest request info
+    const query = `
+      SELECT DISTINCT ON (webhook_id)
+        webhook_id,
+        method,
+        created_at,
+        (SELECT COUNT(*) FROM webhook_requests wr2 WHERE wr2.webhook_id = wr.webhook_id) as request_count
+      FROM webhook_requests wr
+      ORDER BY webhook_id, created_at DESC
+    `;
+    
+    const result = await client.query(query);
+    
+    sendJSON(res, {
+      data: result.rows,
+      total: result.rows.length
+    });
+  } catch (error) {
+    console.error('[API Error] Failed to fetch webhook list:', error);
+    sendError(res, `Failed to fetch webhook list: ${error.message}`, 500);
+  } finally {
+    if (client) client.release();
+  }
+});
+
+// ============================================================================
+// Webhook Endpoints (Public - for receiving webhooks)
+// ============================================================================
+
 // POST /webhook/:id - Accept webhook requests and save to database
 app.post('/webhook/:id', async (req, res) => {
   let client = null;
@@ -1216,102 +1319,6 @@ app.get('/webhook/:id', async (req, res) => {
   } catch (error) {
     console.error('[Webhook Error] Failed to save webhook request:', error);
     sendError(res, `Failed to process webhook: ${error.message}`, 500);
-  } finally {
-    if (client) client.release();
-  }
-});
-
-// API endpoint: Get webhook requests for a specific webhook ID
-app.get('/api/webhooks/:id', async (req, res) => {
-  let client = null;
-  try {
-    const webhookId = req.params.id;
-    const { limit = 100, offset = 0 } = req.query;
-    
-    console.log(`[API] /api/webhooks/${webhookId} called`, { limit, offset });
-    
-    client = await pool.connect();
-    
-    // Get webhook requests
-    const query = `
-      SELECT 
-        id,
-        webhook_id,
-        method,
-        request_body,
-        headers,
-        query_params,
-        ip_address,
-        user_agent,
-        created_at
-      FROM webhook_requests
-      WHERE webhook_id = $1
-      ORDER BY created_at DESC
-      LIMIT $2 OFFSET $3
-    `;
-    
-    const result = await client.query(query, [webhookId, parseInt(limit), parseInt(offset)]);
-    
-    // Get total count
-    const countQuery = `SELECT COUNT(*) as total FROM webhook_requests WHERE webhook_id = $1`;
-    const countResult = await client.query(countQuery, [webhookId]);
-    const total = parseInt(countResult.rows[0].total) || 0;
-    
-    // Parse JSONB fields
-    const requests = result.rows.map(row => ({
-      id: row.id,
-      webhook_id: row.webhook_id,
-      method: row.method,
-      request_body: row.request_body,
-      headers: row.headers,
-      query_params: row.query_params,
-      ip_address: row.ip_address,
-      user_agent: row.user_agent,
-      created_at: row.created_at
-    }));
-    
-    sendJSON(res, {
-      data: requests,
-      total: total,
-      limit: parseInt(limit),
-      offset: parseInt(offset)
-    });
-  } catch (error) {
-    console.error('[API Error] Failed to fetch webhook requests:', error);
-    sendError(res, `Failed to fetch webhook requests: ${error.message}`, 500);
-  } finally {
-    if (client) client.release();
-  }
-});
-
-// API endpoint: Get all webhook IDs (for listing)
-app.get('/api/webhooks', async (req, res) => {
-  let client = null;
-  try {
-    console.log('[API] /api/webhooks called');
-    
-    client = await pool.connect();
-    
-    // Get distinct webhook IDs with their latest request info
-    const query = `
-      SELECT DISTINCT ON (webhook_id)
-        webhook_id,
-        method,
-        created_at,
-        (SELECT COUNT(*) FROM webhook_requests wr2 WHERE wr2.webhook_id = wr.webhook_id) as request_count
-      FROM webhook_requests wr
-      ORDER BY webhook_id, created_at DESC
-    `;
-    
-    const result = await client.query(query);
-    
-    sendJSON(res, {
-      data: result.rows,
-      total: result.rows.length
-    });
-  } catch (error) {
-    console.error('[API Error] Failed to fetch webhook list:', error);
-    sendError(res, `Failed to fetch webhook list: ${error.message}`, 500);
   } finally {
     if (client) client.release();
   }
