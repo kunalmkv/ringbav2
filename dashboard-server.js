@@ -1111,6 +1111,212 @@ app.delete('/api/google-ads-spend/:date', async (req, res) => {
   }
 });
 
+// Webhook endpoints
+// POST /webhook/:id - Accept webhook requests and save to database
+app.post('/webhook/:id', async (req, res) => {
+  let client = null;
+  try {
+    const webhookId = req.params.id;
+    const method = req.method;
+    const requestBody = req.body;
+    const headers = req.headers;
+    const queryParams = req.query;
+    const ipAddress = req.ip || req.connection.remoteAddress || req.headers['x-forwarded-for'] || 'unknown';
+    const userAgent = req.headers['user-agent'] || 'unknown';
+    
+    console.log(`[Webhook] POST /webhook/${webhookId} received`);
+    console.log(`[Webhook] IP: ${ipAddress}, User-Agent: ${userAgent}`);
+    console.log(`[Webhook] Body:`, JSON.stringify(requestBody, null, 2));
+    
+    client = await pool.connect();
+    
+    // Save webhook request to database
+    const insertQuery = `
+      INSERT INTO webhook_requests (
+        webhook_id, method, request_body, headers, query_params, ip_address, user_agent
+      )
+      VALUES ($1, $2, $3, $4, $5, $6, $7)
+      RETURNING id, created_at
+    `;
+    
+    const result = await client.query(insertQuery, [
+      webhookId,
+      method,
+      JSON.stringify(requestBody),
+      JSON.stringify(headers),
+      JSON.stringify(queryParams),
+      ipAddress,
+      userAgent
+    ]);
+    
+    console.log(`[Webhook] Request saved with ID: ${result.rows[0].id}`);
+    
+    // Return success response
+    sendJSON(res, {
+      success: true,
+      message: 'Webhook received and saved',
+      webhook_id: webhookId,
+      request_id: result.rows[0].id,
+      timestamp: result.rows[0].created_at
+    }, 200);
+  } catch (error) {
+    console.error('[Webhook Error] Failed to save webhook request:', error);
+    sendError(res, `Failed to process webhook: ${error.message}`, 500);
+  } finally {
+    if (client) client.release();
+  }
+});
+
+// GET /webhook/:id - Accept GET requests and save to database
+app.get('/webhook/:id', async (req, res) => {
+  let client = null;
+  try {
+    const webhookId = req.params.id;
+    const method = req.method;
+    const queryParams = req.query;
+    const headers = req.headers;
+    const ipAddress = req.ip || req.connection.remoteAddress || req.headers['x-forwarded-for'] || 'unknown';
+    const userAgent = req.headers['user-agent'] || 'unknown';
+    
+    console.log(`[Webhook] GET /webhook/${webhookId} received`);
+    console.log(`[Webhook] IP: ${ipAddress}, User-Agent: ${userAgent}`);
+    console.log(`[Webhook] Query params:`, JSON.stringify(queryParams, null, 2));
+    
+    client = await pool.connect();
+    
+    // Save webhook request to database
+    const insertQuery = `
+      INSERT INTO webhook_requests (
+        webhook_id, method, request_body, headers, query_params, ip_address, user_agent
+      )
+      VALUES ($1, $2, $3, $4, $5, $6, $7)
+      RETURNING id, created_at
+    `;
+    
+    const result = await client.query(insertQuery, [
+      webhookId,
+      method,
+      JSON.stringify({}), // GET requests typically don't have body
+      JSON.stringify(headers),
+      JSON.stringify(queryParams),
+      ipAddress,
+      userAgent
+    ]);
+    
+    console.log(`[Webhook] Request saved with ID: ${result.rows[0].id}`);
+    
+    // Return success response
+    sendJSON(res, {
+      success: true,
+      message: 'Webhook received and saved',
+      webhook_id: webhookId,
+      request_id: result.rows[0].id,
+      timestamp: result.rows[0].created_at
+    }, 200);
+  } catch (error) {
+    console.error('[Webhook Error] Failed to save webhook request:', error);
+    sendError(res, `Failed to process webhook: ${error.message}`, 500);
+  } finally {
+    if (client) client.release();
+  }
+});
+
+// API endpoint: Get webhook requests for a specific webhook ID
+app.get('/api/webhooks/:id', async (req, res) => {
+  let client = null;
+  try {
+    const webhookId = req.params.id;
+    const { limit = 100, offset = 0 } = req.query;
+    
+    console.log(`[API] /api/webhooks/${webhookId} called`, { limit, offset });
+    
+    client = await pool.connect();
+    
+    // Get webhook requests
+    const query = `
+      SELECT 
+        id,
+        webhook_id,
+        method,
+        request_body,
+        headers,
+        query_params,
+        ip_address,
+        user_agent,
+        created_at
+      FROM webhook_requests
+      WHERE webhook_id = $1
+      ORDER BY created_at DESC
+      LIMIT $2 OFFSET $3
+    `;
+    
+    const result = await client.query(query, [webhookId, parseInt(limit), parseInt(offset)]);
+    
+    // Get total count
+    const countQuery = `SELECT COUNT(*) as total FROM webhook_requests WHERE webhook_id = $1`;
+    const countResult = await client.query(countQuery, [webhookId]);
+    const total = parseInt(countResult.rows[0].total) || 0;
+    
+    // Parse JSONB fields
+    const requests = result.rows.map(row => ({
+      id: row.id,
+      webhook_id: row.webhook_id,
+      method: row.method,
+      request_body: row.request_body,
+      headers: row.headers,
+      query_params: row.query_params,
+      ip_address: row.ip_address,
+      user_agent: row.user_agent,
+      created_at: row.created_at
+    }));
+    
+    sendJSON(res, {
+      data: requests,
+      total: total,
+      limit: parseInt(limit),
+      offset: parseInt(offset)
+    });
+  } catch (error) {
+    console.error('[API Error] Failed to fetch webhook requests:', error);
+    sendError(res, `Failed to fetch webhook requests: ${error.message}`, 500);
+  } finally {
+    if (client) client.release();
+  }
+});
+
+// API endpoint: Get all webhook IDs (for listing)
+app.get('/api/webhooks', async (req, res) => {
+  let client = null;
+  try {
+    console.log('[API] /api/webhooks called');
+    
+    client = await pool.connect();
+    
+    // Get distinct webhook IDs with their latest request info
+    const query = `
+      SELECT DISTINCT ON (webhook_id)
+        webhook_id,
+        method,
+        created_at,
+        (SELECT COUNT(*) FROM webhook_requests wr2 WHERE wr2.webhook_id = wr.webhook_id) as request_count
+      FROM webhook_requests wr
+      ORDER BY webhook_id, created_at DESC
+    `;
+    
+    const result = await client.query(query);
+    
+    sendJSON(res, {
+      data: result.rows,
+      total: result.rows.length
+    });
+  } catch (error) {
+    console.error('[API Error] Failed to fetch webhook list:', error);
+    sendError(res, `Failed to fetch webhook list: ${error.message}`, 500);
+  } finally {
+    if (client) client.release();
+  }
+});
+
 // Catch-all route: serve index.html for React Router (SPA routing)
 // Handle both root (/) and /ringba-sync-dashboard paths
 // API routes are handled above via middleware rewrite

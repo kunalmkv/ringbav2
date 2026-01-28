@@ -153,6 +153,14 @@ export const api = {
     if (startDate) params.append('startDate', startDate);
     if (endDate) params.append('endDate', endDate);
     return fetchAPI(`/api/calls-metrics?${params.toString()}`);
+  },
+  // Webhook endpoints
+  getWebhooks: () => fetchAPI('/api/webhooks'),
+  getWebhookRequests: (webhookId, limit = 100, offset = 0) => {
+    const params = new URLSearchParams();
+    params.append('limit', limit.toString());
+    params.append('offset', offset.toString());
+    return fetchAPI(`/api/webhooks/${webhookId}?${params.toString()}`);
   }
 };
 

@@ -36,6 +36,12 @@ const Header = ({ status, statusType, onRefresh, lastUpdated, currentPage, onPag
         >
           📈 Data Analysis
         </button>
+        <button 
+          className={`nav-tab ${currentPage === 'webhook' ? 'active' : ''}`}
+          onClick={() => onPageChange('webhook')}
+        >
+          🔗 Webhook Tester
+        </button>
       </nav>
     </header>
   );

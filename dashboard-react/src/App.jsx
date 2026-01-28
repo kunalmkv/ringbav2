@@ -10,6 +10,7 @@ import ChargebackTracker from './components/ChargebackTracker';
 import PayoutComparison from './components/PayoutComparison';
 import RingbaDashboard from './components/RingbaDashboard';
 import DataAnalysis from './components/DataAnalysis';
+import WebhookTester from './components/WebhookTester';
 import Footer from './components/Footer';
 
 function App() {
@@ -72,6 +73,10 @@ function App() {
         
         {currentPage === 'analysis' && (
           <DataAnalysis />
+        )}
+        
+        {currentPage === 'webhook' && (
+          <WebhookTester />
         )}
       </main>
 
