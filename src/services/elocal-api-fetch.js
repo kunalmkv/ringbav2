@@ -6,7 +6,7 @@ import dotenv from 'dotenv';
 dotenv.config();
 
 // Configuration
-const ELOCAL_API_KEY = process.env.ELOCAL_API_KEY || 'eloc_3gwdtFLxmZoklnc2sHaueBU95aiqFler';
+const ELOCAL_API_KEY = process.env.ELOCAL_API_KEY;
 const ELOCAL_BASE_URL = 'https://apis.elocal.com/affiliates/v2/campaign-results';
 
 // Campaign UUIDs mapping to categories
