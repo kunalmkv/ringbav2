@@ -45,7 +45,7 @@ const parseDate = (dateStr, isElocalDate = false) => {
       }
       return date;
     }
-    
+
     // Try Ringba format: MM/DD/YYYY HH:MM:SS AM/PM (e.g., "11/18/2025 06:29:34 PM")
     // Ringba dates are stored in EST in database (converted during sync)
     // But if we get the original format, we need to handle it
@@ -61,18 +61,18 @@ const parseDate = (dateStr, isElocalDate = false) => {
       const minutes = parseInt(ringbaFormat[5], 10);
       const seconds = parseInt(ringbaFormat[6], 10);
       const ampm = ringbaFormat[7].toUpperCase();
-      
+
       // Convert to 24-hour format
       if (ampm === 'PM' && hours !== 12) {
         hours += 12;
       } else if (ampm === 'AM' && hours === 12) {
         hours = 0;
       }
-      
+
       // Treat as EST (since Ringba dates in DB are already converted to EST)
       return new Date(year, month, day, hours, minutes, seconds);
     }
-    
+
     // Try YYYY-MM-DDTHH:mm:ss format (ISO with time) - this is eLocal format
     const isoMatch = dateStr.match(/^(\d{4})-(\d{2})-(\d{2})T(\d{2}):(\d{2}):(\d{2})/);
     if (isoMatch) {
@@ -86,7 +86,7 @@ const parseDate = (dateStr, isElocalDate = false) => {
       // When comparing, the 10-minute window should account for small timezone differences
       return new Date(year, month, day, hours, minutes, seconds);
     }
-    
+
     // Try YYYY-MM-DD format (date only)
     const yyyymmdd = dateStr.match(/^(\d{4})-(\d{2})-(\d{2})$/);
     if (yyyymmdd) {
@@ -95,7 +95,7 @@ const parseDate = (dateStr, isElocalDate = false) => {
       const day = parseInt(yyyymmdd[3], 10);
       return new Date(year, month, day);
     }
-    
+
     // Try MM/DD/YYYY format (date only, no time)
     const mmddyyyy = dateStr.match(/^(\d{1,2})\/(\d{1,2})\/(\d{4})$/);
     if (mmddyyyy) {
@@ -123,70 +123,70 @@ const matchCall = (elocalCall, ringbaCall, windowMinutes = 30, durationTolerance
   // 0. Match category first (from Ringba target ID)
   const ringbaCategory = getCategoryFromTargetId(ringbaCall.target_id);
   const elocalCategory = elocalCall.category || 'STATIC';
-  
+
   // Categories must match
   if (ringbaCategory !== elocalCategory) {
     return null;
   }
-  
+
   // 1. Match caller ID (convert both to E.164)
   const elocalCallerE164 = toE164(elocalCall.caller_id);
   const ringbaCallerE164 = ringbaCall.caller_id_e164 || toE164(ringbaCall.caller_id);
-  
+
   // Skip anonymous or invalid caller IDs
   const elocalCallerLower = (elocalCall.caller_id || '').toLowerCase();
   if (elocalCallerLower.includes('anonymous') || elocalCallerLower === '' || !elocalCall.caller_id) {
     return null;
   }
-  
+
   if (!elocalCallerE164 || !ringbaCallerE164) {
     return null;
   }
-  
+
   // Compare normalized E.164 formats
   if (elocalCallerE164 !== ringbaCallerE164) {
     return null;
   }
-  
+
   // 2. Match date and time
   // eLocal dates are in EST timezone, Ringba dates may be in different timezone
   // Account for timezone differences - eLocal is EST (UTC-5), Ringba may be CST (UTC-6) or other
   // There can be up to 5-6 hour timezone differences, so we need a larger window
   const elocalDate = parseDate(elocalCall.date_of_call, true); // Mark as eLocal date (EST)
   const ringbaDate = parseDate(ringbaCall.call_date_time, false); // Ringba date
-  
+
   if (!elocalDate || !ringbaDate) {
     return null;
   }
-  
+
   // Check if dates are on the same day or adjacent days
   const elocalDateStr = elocalDate.toISOString().split('T')[0];
   const ringbaDateStr = ringbaDate.toISOString().split('T')[0];
   const elocalDateOnly = new Date(elocalDateStr);
   const ringbaDateOnly = new Date(ringbaDateStr);
   const daysDiff = Math.abs((elocalDateOnly.getTime() - ringbaDateOnly.getTime()) / (1000 * 60 * 60 * 24));
-  
+
   if (daysDiff > 1) {
     return null; // Dates are more than 1 day apart
   }
-  
+
   // Calculate time difference in minutes
   const timeDiff = timeDiffMinutes(elocalDate, ringbaDate);
-  
+
   // Both eLocal and Ringba dates are now stored in EST timezone
   // So we can use the standard 30-minute window for same-day matches
   // For adjacent days: use 24 hours window
   const effectiveWindow = daysDiff === 0 ? windowMinutes : (24 * 60);
-  
+
   if (timeDiff > effectiveWindow) {
     return null; // Time difference too large
   }
-  
+
   // 3. Match call duration (if both have duration data)
   const elocalDuration = Number(elocalCall.total_duration || 0);
   const ringbaDuration = Number(ringbaCall.call_duration || 0);
   const durationDiff = Math.abs(elocalDuration - ringbaDuration);
-  
+
   // If both have duration data, check if they match within tolerance
   // This helps distinguish between multiple calls from the same caller
   let durationMatch = true;
@@ -197,17 +197,17 @@ const matchCall = (elocalCall, ringbaCall, windowMinutes = 30, durationTolerance
     }
     durationMatch = true;
   }
-  
+
   // Calculate match score (lower is better)
   // Prioritize: duration match > time match
   // Note: Payout is NOT used in matching - only category, caller ID, time, and duration
   let matchScore = timeDiff;
-  
+
   // Bonus for duration match
   if (elocalDuration > 0 && ringbaDuration > 0 && durationDiff <= 10) {
     matchScore = matchScore * 0.5; // Strong bonus for close duration match
   }
-  
+
   return {
     elocalCall,
     ringbaCall,
@@ -228,25 +228,25 @@ const getElocalCallsForSync = async (db, startDate, endDate, category = null) =>
       const day = String(date.getDate()).padStart(2, '0');
       return `${year}-${month}-${day}`;
     };
-    
+
     const datesInRange = [];
     const current = new Date(startDate);
     const end = new Date(endDate);
-    
+
     while (current <= end) {
       datesInRange.push(formatDate(new Date(current)));
       current.setDate(current.getDate() + 1);
     }
-    
+
     const placeholders = datesInRange.map((_, i) => `$${i + 1}`).join(', ');
     const params = [...datesInRange];
-    
+
     let categoryFilter = '';
     if (category) {
       categoryFilter = ` AND category = $${params.length + 1}`;
       params.push(category);
     }
-    
+
     const query = `
       SELECT 
         id, caller_id, date_of_call, payout, category,
@@ -255,7 +255,7 @@ const getElocalCallsForSync = async (db, startDate, endDate, category = null) =>
       WHERE SUBSTRING(date_of_call, 1, 10) = ANY(ARRAY[${placeholders}])${categoryFilter}
       ORDER BY caller_id, date_of_call
     `;
-    
+
     const result = await db.pool.query(query, params);
     return result.rows || [];
   } catch (error) {
@@ -269,31 +269,31 @@ const getRingbaCallsForMatching = async (db, startDate, endDate) => {
   try {
     // Ringba dates are now stored in EST format: YYYY-MM-DDTHH:mm:ss
     // We need to extract the date part (YYYY-MM-DD) and match it with our date range
-    
+
     const formatDateForQuery = (date) => {
       const year = date.getFullYear();
       const month = String(date.getMonth() + 1).padStart(2, '0');
       const day = String(date.getDate()).padStart(2, '0');
       return `${year}-${month}-${day}`;
     };
-    
+
     // Generate all dates in the range in YYYY-MM-DD format
     const datesInRange = [];
     const current = new Date(startDate);
     const end = new Date(endDate);
-    
+
     while (current <= end) {
       datesInRange.push(formatDateForQuery(new Date(current)));
       current.setDate(current.getDate() + 1);
     }
-    
+
     // Build query to match date part (first 10 characters: YYYY-MM-DD)
     // Ringba format in DB: "YYYY-MM-DDTHH:mm:ss" (EST timezone)
     const placeholders = datesInRange.map((_, i) => `$${i + 1}`).join(', ');
     const params = [...datesInRange];
-    
+
     console.log(`[Ringba Cost Sync] Querying ringba_calls table for dates: ${datesInRange.join(', ')}`);
-    
+
     const query = `
       SELECT 
         id, inbound_call_id, call_date_time, caller_id, caller_id_e164,
@@ -302,7 +302,7 @@ const getRingbaCallsForMatching = async (db, startDate, endDate) => {
       WHERE SUBSTRING(call_date_time, 1, 10) = ANY(ARRAY[${placeholders}])
       ORDER BY caller_id_e164, call_date_time
     `;
-    
+
     const result = await db.pool.query(query, params);
     const calls = result.rows || [];
     console.log(`[Ringba Cost Sync] Retrieved ${calls.length} Ringba calls from database`);
@@ -318,7 +318,7 @@ const detectChanges = (elocalCalls, ringbaCalls) => {
   const updates = [];
   const unmatched = [];
   const matched = []; // Track all matched calls (including those that don't need updates)
-  
+
   // Group Ringba calls by category first, then by normalized caller ID for faster lookup
   // Structure: Map<category, Map<callerE164, Array<ringbaCall>>>
   const ringbaCallsByCategoryAndCaller = new Map();
@@ -327,99 +327,99 @@ const detectChanges = (elocalCalls, ringbaCalls) => {
     if (!category) {
       continue; // Skip calls with invalid target ID
     }
-    
+
     const callerE164 = ringbaCall.caller_id_e164 || toE164(ringbaCall.caller_id);
     if (!callerE164) {
       continue; // Skip calls without valid caller ID
     }
-    
+
     if (!ringbaCallsByCategoryAndCaller.has(category)) {
       ringbaCallsByCategoryAndCaller.set(category, new Map());
     }
-    
+
     const callsByCaller = ringbaCallsByCategoryAndCaller.get(category);
     if (!callsByCaller.has(callerE164)) {
       callsByCaller.set(callerE164, []);
     }
     callsByCaller.get(callerE164).push(ringbaCall);
   }
-  
+
   // Track which Ringba calls have been matched
   const matchedRingbaIds = new Set();
-  
+
   // Match each eLocal call
   for (const elocalCall of elocalCalls) {
     const elocalCategory = elocalCall.category || 'STATIC';
     const callerE164 = toE164(elocalCall.caller_id);
-    
+
     if (!callerE164) {
       unmatched.push({ elocalCall, reason: 'Invalid caller ID' });
       continue;
     }
-    
+
     // Get Ringba calls for this category and caller ID
     const categoryCalls = ringbaCallsByCategoryAndCaller.get(elocalCategory);
     if (!categoryCalls) {
       unmatched.push({ elocalCall, reason: `No Ringba calls found for category: ${elocalCategory}` });
       continue;
     }
-    
+
     const candidateRingbaCalls = categoryCalls.get(callerE164) || [];
-    
+
     if (candidateRingbaCalls.length === 0) {
       unmatched.push({ elocalCall, reason: `No matching Ringba call found for category ${elocalCategory} and caller ${callerE164}` });
       continue;
     }
-    
+
     // Find best match
     let bestMatch = null;
     let bestScore = Infinity;
-    
+
     for (const ringbaCall of candidateRingbaCalls) {
       if (matchedRingbaIds.has(ringbaCall.id)) {
         continue; // Already matched
       }
-      
+
       const match = matchCall(elocalCall, ringbaCall);
       if (match && match.matchScore < bestScore) {
         bestMatch = match;
         bestScore = match.matchScore;
       }
     }
-    
+
     if (!bestMatch) {
       unmatched.push({ elocalCall, reason: 'No matching Ringba call found (time/duration mismatch)' });
       continue;
     }
-    
+
     matchedRingbaIds.add(bestMatch.ringbaCall.id);
-    
+
     // Track all matched calls (for updating ringba_inbound_call_id in database)
     // This includes calls that need updates AND calls that are already in sync
     matched.push({
       elocalCallId: elocalCall.id,
       ringbaInboundCallId: bestMatch.ringbaCall.inbound_call_id
     });
-    
+
     // Check if payout/revenue needs updating
     const elocalPayout = Number(elocalCall.payout || 0);
     const ringbaPayout = Number(bestMatch.ringbaCall.payout_amount || 0);
     const ringbaRevenue = Number(bestMatch.ringbaCall.revenue_amount || 0);
-    
+
     // Skip if eLocal payout is 0 and Ringba payout is also 0 (no change needed)
     // But we still track it in matched[] for ringba_inbound_call_id update
     if (elocalPayout === 0 && ringbaPayout === 0 && ringbaRevenue === 0) {
       continue; // No update needed, but ringba_inbound_call_id will still be updated
     }
-    
+
     // Use eLocal payout for both revenue and payout (same value)
     const newPayout = elocalPayout;
     const newRevenue = elocalPayout; // Always same as payout
-    
+
     // Check if update is needed (tolerance: 0.01)
     const payoutDiff = Math.abs(newPayout - ringbaPayout);
     const revenueDiff = Math.abs(newRevenue - ringbaRevenue);
-    
+
     if (payoutDiff > 0.01 || revenueDiff > 0.01) {
       updates.push({
         elocalCallId: elocalCall.id,
@@ -438,7 +438,7 @@ const detectChanges = (elocalCalls, ringbaCalls) => {
       });
     }
   }
-  
+
   return { updates, unmatched, matched };
 };
 
@@ -451,14 +451,14 @@ const updateRingbaCall = async (accountId, apiToken, update) => {
       reason: 'Call payments synced from eLocal database.',
       targetId: update.targetId || null // Include target ID if available
     };
-    
+
     const updateEither = await updateCallPayment(accountId, apiToken)(update.ringbaInboundCallId, payload)();
-    
+
     if (updateEither._tag === 'Left') {
       const error = updateEither.left;
       throw new Error(error.message || String(error));
     }
-    
+
     return {
       success: true,
       elocalCallId: update.elocalCallId,
@@ -479,20 +479,20 @@ const updateRingbaCall = async (accountId, apiToken, update) => {
 export const syncCostToRingba = async (config, dateRange, category = null) => {
   const accountId = config.ringbaAccountId;
   const apiToken = config.ringbaApiToken;
-  
+
   if (!accountId || !apiToken) {
     throw new Error('Ringba account ID and API token are required');
   }
-  
+
   const db = dbOps(config);
-  
+
   // Parse date range
   const startDate = new Date(dateRange.startDate);
   const endDate = new Date(dateRange.endDate);
   endDate.setHours(23, 59, 59, 999);
-  
+
   const categoryLabel = category ? ` (${category} category)` : ' (all categories)';
-  
+
   console.log('');
   console.log('='.repeat(70));
   console.log('Ringba Cost Sync - Sync eLocal Changes to Ringba');
@@ -502,12 +502,12 @@ export const syncCostToRingba = async (config, dateRange, category = null) => {
   console.log(`End: ${endDate.toISOString()}`);
   console.log('='.repeat(70));
   console.log('');
-  
+
   // Step 1: Get eLocal calls
   console.log(`[Step 1] Fetching eLocal calls${categoryLabel}...`);
   const elocalCalls = await getElocalCallsForSync(db, startDate, endDate, category);
   console.log(`[Step 1] ✅ Fetched ${elocalCalls.length} eLocal calls`);
-  
+
   // Log all eLocal calls
   if (elocalCalls.length > 0) {
     console.log(`[Step 1] All eLocal calls fetched:`);
@@ -516,7 +516,7 @@ export const syncCostToRingba = async (config, dateRange, category = null) => {
       const revenue = Number(call.original_revenue || call.payout || 0);
       const originalPayout = Number(call.original_payout || call.payout || 0);
       const originalRevenue = Number(call.original_revenue || call.payout || 0);
-      
+
       console.log(`         [${index + 1}] eLocal Call ID: ${call.id}`);
       console.log(`             - Caller ID: ${call.caller_id || 'N/A'}`);
       console.log(`             - Date/Time: ${call.date_of_call || 'N/A'}`);
@@ -526,7 +526,7 @@ export const syncCostToRingba = async (config, dateRange, category = null) => {
     });
   }
   console.log('');
-  
+
   if (elocalCalls.length === 0) {
     console.log('[INFO] No eLocal calls found for the date range. Nothing to sync.');
     return {
@@ -543,12 +543,12 @@ export const syncCostToRingba = async (config, dateRange, category = null) => {
       unmatched: 0
     };
   }
-  
+
   // Step 2: Get Ringba calls
   console.log('[Step 2] Fetching Ringba calls for matching...');
   const ringbaCalls = await getRingbaCallsForMatching(db, startDate, endDate);
   console.log(`[Step 2] ✅ Fetched ${ringbaCalls.length} Ringba calls from database`);
-  
+
   // Log all fetched Ringba calls
   if (ringbaCalls.length > 0) {
     console.log(`[Step 2] All Ringba calls fetched (${ringbaCalls.length}):`);
@@ -560,7 +560,7 @@ export const syncCostToRingba = async (config, dateRange, category = null) => {
     });
   }
   console.log('');
-  
+
   if (ringbaCalls.length === 0) {
     console.log('[WARN] No Ringba calls found for the date range. Cannot sync.');
     return {
@@ -577,7 +577,7 @@ export const syncCostToRingba = async (config, dateRange, category = null) => {
       unmatched: elocalCalls.length
     };
   }
-  
+
   // Step 3: Detect changes
   console.log('[Step 3] Detecting changes between eLocal and Ringba...');
   const { updates, unmatched, matched } = detectChanges(elocalCalls, ringbaCalls);
@@ -585,7 +585,7 @@ export const syncCostToRingba = async (config, dateRange, category = null) => {
   console.log(`         - Unmatched eLocal calls: ${unmatched.length}`);
   console.log(`         - Matched calls: ${matched.length}`);
   console.log('');
-  
+
   // Log all unmatched calls
   if (unmatched.length > 0) {
     console.log(`[Step 3] Unmatched eLocal calls (${unmatched.length}):`);
@@ -595,7 +595,7 @@ export const syncCostToRingba = async (config, dateRange, category = null) => {
       const revenue = Number(call.original_revenue || call.payout || 0);
       const originalPayout = Number(call.original_payout || call.payout || 0);
       const originalRevenue = Number(call.original_revenue || call.payout || 0);
-      
+
       console.log(`         [${index + 1}] eLocal Call ID: ${call.id}`);
       console.log(`             - Caller ID: ${call.caller_id || 'N/A'}`);
       console.log(`             - Date/Time: ${call.date_of_call || 'N/A'}`);
@@ -606,14 +606,14 @@ export const syncCostToRingba = async (config, dateRange, category = null) => {
     });
     console.log('');
   }
-  
+
   // Log all matched calls (even if they don't need updating)
   const matchedCount = elocalCalls.length - unmatched.length;
   if (matchedCount > 0) {
     console.log(`[Step 3] Matched calls (${matchedCount}):`);
     console.log(`         - Calls that need updating: ${updates.length}`);
     console.log(`         - Calls already in sync: ${matchedCount - updates.length}`);
-    
+
     // Log details of matched calls that need updating
     if (updates.length > 0) {
       console.log(`         Calls requiring updates:`);
@@ -628,7 +628,7 @@ export const syncCostToRingba = async (config, dateRange, category = null) => {
     }
     console.log('');
   }
-  
+
   // Step 3.5: Update ringba_inbound_call_id in database for all matched calls
   if (matched.length > 0) {
     console.log(`[Step 3.5] Updating ringba_inbound_call_id for ${matched.length} matched calls...`);
@@ -641,7 +641,7 @@ export const syncCostToRingba = async (config, dateRange, category = null) => {
       console.log('');
     }
   }
-  
+
   if (updates.length === 0) {
     console.log('[INFO] No changes detected. All calls are already in sync.');
     return {
@@ -658,17 +658,17 @@ export const syncCostToRingba = async (config, dateRange, category = null) => {
       unmatched: unmatched.length
     };
   }
-  
+
   // Step 4: Update Ringba in bulk
   console.log('[Step 4] Updating Ringba calls...');
   let updated = 0;
   let failed = 0;
-  
+
   // Process updates with small delay to avoid rate limiting
   for (let i = 0; i < updates.length; i++) {
     const update = updates[i];
     const startTime = new Date().toISOString();
-    
+
     console.log(`[Step 4] [${i + 1}/${updates.length}] Updating call ${update.ringbaInboundCallId}...`);
     console.log(`         - Call ID: ${update.ringbaInboundCallId}`);
     console.log(`         - Target ID: ${update.targetId || 'N/A'}`);
@@ -677,11 +677,11 @@ export const syncCostToRingba = async (config, dateRange, category = null) => {
     console.log(`         - Current: payout=$${update.currentPayout.toFixed(2)}, revenue=$${update.currentRevenue.toFixed(2)}`);
     console.log(`         - New: payout=$${update.newPayout.toFixed(2)}, revenue=$${update.newRevenue.toFixed(2)}`);
     console.log(`         - Match Info: timeDiff=${update.matchInfo.timeDiff.toFixed(2)}min, durationMatch=${update.matchInfo.durationMatch}`);
-    
+
     const result = await updateRingbaCall(accountId, apiToken, update);
     const endTime = new Date().toISOString();
     const duration = ((new Date(endTime) - new Date(startTime)) / 1000).toFixed(2);
-    
+
     if (result.success) {
       updated++;
       console.log(`         ✅ Successfully updated`);
@@ -693,17 +693,17 @@ export const syncCostToRingba = async (config, dateRange, category = null) => {
       console.error(`         - End Time: ${endTime}`);
       console.error(`         - Duration: ${duration}s`);
     }
-    
+
     // Small delay between requests
     if (i < updates.length - 1) {
       await new Promise(resolve => setTimeout(resolve, 500));
     }
   }
-  
+
   console.log('');
   console.log(`[Step 4] ✅ Updated ${updated} calls, ${failed} failed`);
   console.log('');
-  
+
   // Summary
   const summary = {
     dateRange: {
@@ -718,7 +718,7 @@ export const syncCostToRingba = async (config, dateRange, category = null) => {
     failed: failed,
     unmatched: unmatched.length
   };
-  
+
   console.log('='.repeat(70));
   console.log('Sync Summary');
   console.log('='.repeat(70));
@@ -732,7 +732,7 @@ export const syncCostToRingba = async (config, dateRange, category = null) => {
   console.log(`Unmatched:             ${summary.unmatched}`);
   console.log('='.repeat(70));
   console.log('');
-  
+
   return summary;
 };
 

@@ -1,259 +1,59 @@
-// HTTP client to fetch campaign results HTML using saved cookies from PostgreSQL
-import { readSession, isSessionValid, updateSessionStatus } from '../auth/session-store-postgres.js';
-import { detectPagination } from '../scrapers/html-extractor.js';
+import fetch from 'node-fetch';
+import * as TE from 'fp-ts/lib/TaskEither.js';
+import dotenv from 'dotenv';
 
-const defaultHeaders = (referer) => ({
-  'User-Agent': 'Mozilla/5.0',
-  'Accept': 'text/html,application/xhtml+xml,application/xml;q=0.9,image/avif,image/webp,image/apng,*/*;q=0.8,application/signed-exchange;v=b3;q=0.7',
-  'Accept-Language': 'en-GB,en-US;q=0.9,en;q=0.8',
-  'Cache-Control': 'no-cache',
-  'Pragma': 'no-cache',
-  'Referer': referer,
-});
+dotenv.config();
 
-export const buildCampaignResultsUrl = (baseUrl, dateRange, campaignId = '50033', page = 1) =>
-  `${baseUrl}/partner_users/campaign_results?caller_phone_number=&end_date=${dateRange.endDateURL}&id=${campaignId}&page=${page}&start_date=${dateRange.startDateURL}`;
+const ELOCAL_BASE_URL = 'https://apis.elocal.com/affiliates/v2/campaign-results';
 
-export const fetchCampaignResultsHtmlWithSavedSession = async (config, dateRange, campaignId = '50033', page = 1) => {
-  // Read session from PostgreSQL database
-  const session = await readSession(config);
-  if (!isSessionValid(session)) {
-    const err = new Error('Saved auth session is missing or expired');
-    err.code = 'SESSION_INVALID';
-    
-    // Update session status if we have a session ID
-    if (session && session.id) {
-      try {
-        await updateSessionStatus(config, session.id, {
-          isWorking: false,
-          lastErrorMessage: 'Session expired or invalid'
-        });
-      } catch (updateError) {
-        console.warn('[WARN] Failed to update session status:', updateError.message);
-      }
-    }
-    
-    throw err;
-  }
+/**
+ * Fetch calls from eLocal API v2
+ * 
+ * @param {string} apiKey - eLocal API Key
+ * @param {string} uuid - Campaign UUID
+ * @param {Object} dateRange - { startDate, endDate } in YYYY-MM-DD format
+ * @param {Object} options - { sortBy, sortOrder }
+ * @returns {TE.TaskEither<Error, Object>} API response
+ */
+export const getElocalCalls = (apiKey, uuid) => (dateRange, options = {}) =>
+  TE.tryCatch(
+    async () => {
+      if (!apiKey) throw new Error('eLocal API Key is required');
+      if (!uuid) throw new Error('Campaign UUID is required');
 
-  const url = buildCampaignResultsUrl(config.elocalBaseUrl, dateRange, campaignId, page);
-  const headers = {
-    ...defaultHeaders(`${config.elocalBaseUrl}/partner_users/campaign_results?id=${campaignId}`),
-    Cookie: session.cookieHeader,
-  };
+      const url = new URL(`${ELOCAL_BASE_URL}/${uuid}/calls.json`);
 
-  let requestSuccessful = false;
-  try {
-  const res = await fetch(url, { method: 'GET', headers });
-  if (!res.ok) {
-    const text = await res.text().catch(() => '');
-    const err = new Error(`HTTP ${res.status} ${res.statusText}`);
-      err.details = text.slice(0, 300);
-      
-      // Update session status if request failed (might indicate session issue)
-      if (session && session.id && (res.status === 401 || res.status === 403)) {
-        try {
-          await updateSessionStatus(config, session.id, {
-            isWorking: false,
-            lastErrorMessage: `HTTP ${res.status}: ${res.statusText}`,
-            lastChecked: new Date()
-          });
-        } catch (updateError) {
-          console.warn('[WARN] Failed to update session status:', updateError.message);
+      // Add query parameters (API v2 requires YYYY-MM-DD)
+      url.searchParams.append('start_date', dateRange.startDateURL);
+      url.searchParams.append('end_date', dateRange.endDateURL);
+      url.searchParams.append('sortBy', options.sortBy || 'callStartTime');
+      url.searchParams.append('sortOrder', options.sortOrder || 'desc');
+
+      console.log(`[eLocal] Fetching API: ${url.toString()}`);
+
+      const response = await fetch(url.toString(), {
+        method: 'GET',
+        headers: {
+          'x-api-key': apiKey,
+          'Content-Type': 'application/json'
         }
-      }
-      
-    throw err;
-  }
-    
-    requestSuccessful = true;
-    const html = await res.text();
-    
-    // Update session status on successful request (increment checked_count, update last_checked)
-    if (session && session.id) {
-      try {
-        await updateSessionStatus(config, session.id, {
-          lastChecked: new Date(),
-          incrementCheckedCount: true
-        });
-      } catch (updateError) {
-        // Non-critical error, just log it
-        console.warn('[WARN] Failed to update session status:', updateError.message);
-      }
-    }
-    
-    return { url, html, page };
-  } catch (error) {
-    // If request failed and we haven't updated session status yet, do it now
-    if (!requestSuccessful && session && session.id && error.code !== 'SESSION_INVALID') {
-      try {
-        await updateSessionStatus(config, session.id, {
-          lastChecked: new Date(),
-          lastErrorMessage: error.message
-        });
-      } catch (updateError) {
-        console.warn('[WARN] Failed to update session status:', updateError.message);
-      }
-    }
-    throw error;
-  }
-};
-
-// Fetch all pages of campaign results
-export const fetchAllCampaignResultsPages = async (config, dateRange, campaignId = '50033', includeAdjustments = true) => {
-  // Read session from PostgreSQL database
-  const session = await readSession(config);
-  if (!isSessionValid(session)) {
-    const err = new Error('Saved auth session is missing or expired');
-    err.code = 'SESSION_INVALID';
-    
-    // Update session status if we have a session ID
-    if (session && session.id) {
-      try {
-        await updateSessionStatus(config, session.id, {
-          isWorking: false,
-          lastErrorMessage: 'Session expired or invalid'
-        });
-      } catch (updateError) {
-        console.warn('[WARN] Failed to update session status:', updateError.message);
-      }
-    }
-    
-    throw err;
-  }
-  
-  // Update session status at start of pagination (increment checked_count)
-  if (session && session.id) {
-    try {
-      await updateSessionStatus(config, session.id, {
-        lastChecked: new Date(),
-        incrementCheckedCount: true
       });
-    } catch (updateError) {
-      // Non-critical error, just log it
-      console.warn('[WARN] Failed to update session status:', updateError.message);
-    }
-  }
 
-  const allCalls = [];
-  const allAdjustments = [];
-  let currentPage = 1;
-  let totalPages = null;
-  let hasMorePages = true;
-  let consecutiveEmptyPages = 0;
-  const MAX_CONSECUTIVE_EMPTY_PAGES = 3;
-
-  console.log(`[INFO] Starting paginated data fetch for campaign ${campaignId}${includeAdjustments ? ' (with adjustments)' : ' (no adjustments)'}...`);
-
-  while (hasMorePages) {
-    try {
-      console.log(`[INFO] Fetching page ${currentPage}...`);
-      const fetched = await fetchCampaignResultsHtmlWithSavedSession(config, dateRange, campaignId, currentPage);
-      
-      // Detect pagination from first page
-      if (currentPage === 1) {
-        const paginationInfo = detectPagination(fetched.html);
-        totalPages = paginationInfo.totalPages;
-        console.log(`[INFO] Detected pagination: ${paginationInfo.hasPagination ? `${totalPages} pages` : 'single page'}`);
-        
-        // If no pagination detected and totalPages is 1, we'll still try page 2
-        // to be safe (in case pagination detection missed it)
-        // We'll stop if page 2 has no data
-        if (!paginationInfo.hasPagination && totalPages === 1) {
-          // Don't set hasMorePages to false yet - try page 2 first
-          totalPages = null; // Will be discovered dynamically
-        }
+      if (!response.ok) {
+        const errorText = await response.text().catch(() => 'Unable to read error response');
+        throw new Error(`eLocal API error ${response.status}: ${errorText}`);
       }
 
-      // Extract data from current page
-      const { extractCampaignCallsFromHtml, extractAdjustmentDetailsFromHtml } = await import('../scrapers/html-extractor.js');
-      const pageCalls = extractCampaignCallsFromHtml(fetched.html);
-      const pageAdjustments = includeAdjustments ? extractAdjustmentDetailsFromHtml(fetched.html) : [];
-      
-      // A page is considered "empty" if it has no calls
-      // For STATIC category, we still collect adjustments, but we stop pagination based on calls
-      // For API category, we only care about calls
-      const isPageEmptyForCalls = pageCalls.length === 0;
-      
-      console.log(`[INFO] Page ${currentPage}: Found ${pageCalls.length} calls${includeAdjustments ? `, ${pageAdjustments.length} adjustments` : ' (adjustments skipped)'}`);
-      
-      // Track consecutive empty pages (based on calls only)
-      // Stop pagination if we hit 3 consecutive pages with no calls
-      if (isPageEmptyForCalls) {
-        consecutiveEmptyPages++;
-        console.log(`[INFO] Page ${currentPage} has no calls (${consecutiveEmptyPages} consecutive page${consecutiveEmptyPages !== 1 ? 's' : ''} without calls)`);
-      } else {
-        // Reset counter if page has calls
-        consecutiveEmptyPages = 0;
-        allCalls.push(...pageCalls);
-        if (includeAdjustments) {
-          allAdjustments.push(...pageAdjustments);
-        }
-      }
+      const data = await response.json();
 
-      // Check if we should continue
-      if (totalPages !== null) {
-        // We know the total number of pages
-        if (currentPage >= totalPages) {
-          hasMorePages = false;
-        } else if (consecutiveEmptyPages >= MAX_CONSECUTIVE_EMPTY_PAGES) {
-          // Stop if we hit 3 consecutive empty pages (even if totalPages suggests more)
-          console.log(`[INFO] Stopping pagination: Found ${consecutiveEmptyPages} consecutive empty pages`);
-          hasMorePages = false;
-        } else {
-          currentPage++;
-        }
-      } else {
-        // We don't know total pages - check consecutive empty pages
-        if (consecutiveEmptyPages >= MAX_CONSECUTIVE_EMPTY_PAGES) {
-          // Stop after 3 consecutive empty pages
-          console.log(`[INFO] Stopping pagination: Found ${consecutiveEmptyPages} consecutive empty pages`);
-          hasMorePages = false;
-        } else {
-          // Try next page
-          currentPage++;
-          // Safety limit: don't fetch more than 100 pages
-          if (currentPage > 100) {
-            console.warn('[WARN] Reached safety limit of 100 pages. Stopping pagination.');
-            hasMorePages = false;
-          }
-        }
-      }
+      // Handle different possible response formats (array vs object with calls array)
+      const calls = Array.isArray(data) ? data : (data.calls || data.results || []);
 
-      // Small delay between page requests to avoid rate limiting
-      if (hasMorePages) {
-        await new Promise(resolve => setTimeout(resolve, 500));
-      }
-    } catch (error) {
-      console.error(`[ERROR] Failed to fetch page ${currentPage}:`, error.message);
-      // If it's the first page, throw the error
-      if (currentPage === 1) {
-        throw error;
-      }
-      // Otherwise, assume we've reached the end
-      hasMorePages = false;
-    }
-  }
-
-  console.log(`[INFO] Completed paginated fetch: ${currentPage - 1} page(s), ${allCalls.length} total calls, ${allAdjustments.length} total adjustments`);
-
-  // Update session status on successful completion
-  if (session && session.id) {
-    try {
-      await updateSessionStatus(config, session.id, {
-        lastChecked: new Date()
-      });
-    } catch (updateError) {
-      // Non-critical error, just log it
-      console.warn('[WARN] Failed to update session status:', updateError.message);
-    }
-  }
-
-  return {
-    calls: allCalls,
-    adjustments: allAdjustments,
-    pagesFetched: currentPage - 1
-  };
-};
-
-
+      return {
+        calls,
+        totalCalls: calls.length,
+        raw: data
+      };
+    },
+    (error) => new Error(`Failed to fetch calls from eLocal API: ${error.message}`)
+  );

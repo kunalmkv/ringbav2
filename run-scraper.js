@@ -66,10 +66,10 @@ const parseDate = (dateStr) => {
     const month = parseInt(yyyyMMdd[2], 10) - 1; // Month is 0-indexed
     const day = parseInt(yyyyMMdd[3], 10);
     const date = new Date(year, month, day);
-    if (!isNaN(date.getTime()) && 
-        date.getFullYear() === year && 
-        date.getMonth() === month && 
-        date.getDate() === day) {
+    if (!isNaN(date.getTime()) &&
+      date.getFullYear() === year &&
+      date.getMonth() === month &&
+      date.getDate() === day) {
       return date;
     }
   }
@@ -81,10 +81,10 @@ const parseDate = (dateStr) => {
     const month = parseInt(ddMMyyyyDash[2], 10) - 1; // Month is 0-indexed
     const year = parseInt(ddMMyyyyDash[3], 10);
     const date = new Date(year, month, day);
-    if (!isNaN(date.getTime()) && 
-        date.getFullYear() === year && 
-        date.getMonth() === month && 
-        date.getDate() === day) {
+    if (!isNaN(date.getTime()) &&
+      date.getFullYear() === year &&
+      date.getMonth() === month &&
+      date.getDate() === day) {
       return date;
     }
   }
@@ -96,10 +96,10 @@ const parseDate = (dateStr) => {
     const day = parseInt(mmddyyyy[2], 10);
     const year = parseInt(mmddyyyy[3], 10);
     const date = new Date(year, month, day);
-    if (!isNaN(date.getTime()) && 
-        date.getFullYear() === year && 
-        date.getMonth() === month && 
-        date.getDate() === day) {
+    if (!isNaN(date.getTime()) &&
+      date.getFullYear() === year &&
+      date.getMonth() === month &&
+      date.getDate() === day) {
       return date;
     }
   }
@@ -111,10 +111,10 @@ const parseDate = (dateStr) => {
     const month = parseInt(ddmmyyyy[2], 10) - 1; // Month is 0-indexed
     const year = parseInt(ddmmyyyy[3], 10);
     const date = new Date(year, month, day);
-    if (!isNaN(date.getTime()) && 
-        date.getFullYear() === year && 
-        date.getMonth() === month && 
-        date.getDate() === day) {
+    if (!isNaN(date.getTime()) &&
+      date.getFullYear() === year &&
+      date.getMonth() === month &&
+      date.getDate() === day) {
       return date;
     }
   }
@@ -126,17 +126,22 @@ const parseDate = (dateStr) => {
 const createDateRange = (startDate, endDate) => {
   // Set time to start of day for startDate
   startDate.setHours(0, 0, 0, 0);
-  
+
   // Set time to end of day for endDate
   endDate.setHours(23, 59, 59, 999);
-  
+
+  // eLocal API treats end date as exclusive.
+  // To make the range inclusive of the end date, we add 1 day for the URL parameter.
+  const endDateForURL = new Date(endDate);
+  endDateForURL.setDate(endDateForURL.getDate() + 1);
+
   return {
     startDate,
     endDate,
     startDateFormatted: formatDateForElocal(startDate),
     endDateFormatted: formatDateForElocal(endDate),
     startDateURL: formatDateForURL(startDate),
-    endDateURL: formatDateForURL(endDate)
+    endDateURL: formatDateForURL(endDateForURL) // Always use the extended date for URL
   };
 };
 
@@ -150,7 +155,7 @@ const parseDateRange = (dateRangeStr) => {
   // Check if it's a range (contains colon)
   if (dateRangeStr.includes(':')) {
     const [startStr, endStr] = dateRangeStr.split(':').map(s => s.trim());
-    
+
     if (!startStr || !endStr) {
       throw new Error('Invalid date range format. Use: YYYY-MM-DD:YYYY-MM-DD or MM/DD/YYYY:MM/DD/YYYY');
     }
@@ -174,7 +179,7 @@ const parseDateRange = (dateRangeStr) => {
   } else {
     // Single date
     const date = parseDate(dateRangeStr);
-    
+
     if (!date) {
       throw new Error(`Invalid date format: ${dateRangeStr}. Use YYYY-MM-DD, MM/DD/YYYY, or DD-MM-YYYY`);
     }
@@ -206,14 +211,14 @@ const validateConfig = (config) => {
     { env: 'POSTGRES_USER_NAME', alt: 'DB_USER' },
     { env: 'POSTGRES_PASSWORD', alt: 'DB_PASSWORD' }
   ];
-  
+
   const missingVars = requiredVars.filter(
     ({ env, alt }) => !process.env[env] && !process.env[alt]
   ).map(({ env }) => env);
 
   if (missingVars.length > 0) {
     console.error('[ERROR] Missing required environment variables:');
-    missingVars.forEach(varName => 
+    missingVars.forEach(varName =>
       console.error(`  - ${varName} (or ${varName.replace('POSTGRES_', 'DB_').replace('_NAME', '').replace('_USER', '_USER')})`)
     );
     console.error('\nPlease ensure your .env file contains all required variables.');

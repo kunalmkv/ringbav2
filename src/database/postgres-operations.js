@@ -4,6 +4,35 @@ const { Pool } = pg;
 // Initialize PostgreSQL connection pool
 let pool = null;
 
+/**
+ * Standardize phone number to E.164 format
+ * @param {string} raw - Raw phone number (e.g., "+1 (555) 123-4567" or "(555) 123-4567")
+ * @returns {string|null} - Normalized phone number (e.g., "+15551234567") or null if invalid
+ */
+const toE164 = (raw) => {
+  if (!raw) return null;
+
+  // Remove all non-digit characters
+  const digits = (String(raw) || '').replace(/\D/g, '');
+  if (!digits) return null;
+
+  // If it already starts with +, assume it's mostly correct but clean non-digits
+  if (String(raw).startsWith('+')) {
+    return `+${digits}`;
+  }
+
+  // US/Canada numbers
+  if (digits.length === 11 && digits.startsWith('1')) {
+    return `+${digits}`;
+  }
+  if (digits.length === 10) {
+    return `+1${digits}`;
+  }
+
+  // Default fallback for other lengths (prepend + if not present)
+  return digits.length > 0 ? `+${digits}` : null;
+};
+
 export const dbOps = (config) => {
   if (!pool) {
     pool = new Pool({
@@ -111,7 +140,14 @@ export const dbOps = (config) => {
         try {
           await client.query('BEGIN');
 
-          for (const call of calls) {
+          for (let call of calls) {
+            // Normalize caller ID to E.164 to prevent duplicate formats
+            // (e.g., "(941) 339-9766" vs "+19413399766")
+            const normalizedCallerId = toE164(call.callerId);
+            if (normalizedCallerId) {
+              call.callerId = normalizedCallerId;
+            }
+
             // Check if call already exists (based on callerId, date_of_call, and category)
             // date_of_call now stores full ISO timestamp (YYYY-MM-DDTHH:mm:ss)
             // Match on exact timestamp to allow multiple calls per day
@@ -121,11 +157,11 @@ export const dbOps = (config) => {
             // 1. Look up the record by the ORIGINAL timestamp
             // 2. Update it with the CORRECTED timestamp (from adjustment's "Time of Call")
             // 3. BUT if the corrected timestamp already exists, skip the timestamp correction
-            
+
             const lookupTimestamp = call.originalDateOfCall || call.dateOfCall;
             let correctedTimestamp = call.dateOfCall;
             let isTimestampCorrection = call.originalDateOfCall && call.originalDateOfCall !== call.dateOfCall;
-            
+
             // If this is a timestamp correction, check if the corrected timestamp would cause a duplicate
             if (isTimestampCorrection) {
               const duplicateCheckQuery = `
@@ -140,11 +176,11 @@ export const dbOps = (config) => {
                 correctedTimestamp,
                 call.category || 'STATIC'
               ]);
-              
+
               if (duplicateCheckResult.rows.length > 0) {
                 // A record with the corrected timestamp already exists!
                 // Skip the timestamp correction - keep the original timestamp
-                console.log(`[DB SKIP] Timestamp correction would cause duplicate for caller ${call.callerId.substring(0,10)}...`);
+                console.log(`[DB SKIP] Timestamp correction would cause duplicate for caller ${call.callerId.substring(0, 10)}...`);
                 console.log(`         - Original: ${call.originalDateOfCall}`);
                 console.log(`         - Corrected (skipped): ${correctedTimestamp}`);
                 console.log(`         - Reason: Record with corrected timestamp already exists`);
@@ -153,7 +189,7 @@ export const dbOps = (config) => {
                 skippedDuplicates++;
               }
             }
-            
+
             const checkQuery = `
               SELECT id FROM elocal_call_data
               WHERE caller_id = $1 
@@ -190,10 +226,12 @@ export const dbOps = (config) => {
                   adjustment_duration = $15,
                   unmatched = $16,
                   ringba_inbound_call_id = $17,
+                  original_payout = $18,
+                  original_revenue = $19,
                   updated_at = NOW()
-                WHERE caller_id = $18 
-                  AND date_of_call = $19
-                  AND category = $20
+                WHERE caller_id = $20 
+                  AND date_of_call = $21
+                  AND category = $22
                 RETURNING id;
               `;
               await client.query(updateQuery, [
@@ -214,12 +252,14 @@ export const dbOps = (config) => {
                 call.adjustmentDuration || null,
                 call.unmatched || false,
                 call.ringbaInboundCallId || null,
+                call.originalPayout !== undefined ? call.originalPayout : null,
+                call.originalRevenue !== undefined ? call.originalRevenue : null,
                 call.callerId,
                 lookupTimestamp || '', // Use original timestamp for WHERE clause
                 call.category || 'STATIC'
               ]);
               updated++;
-              
+
               if (isTimestampCorrection) {
                 timestampCorrected++;
               }
@@ -237,7 +277,7 @@ export const dbOps = (config) => {
                 correctedTimestamp,
                 call.category || 'STATIC'
               ]);
-              
+
               if (existsCheckResult.rows.length > 0) {
                 // Record with this timestamp already exists, update it instead
                 const updateQuery = `
@@ -258,10 +298,12 @@ export const dbOps = (config) => {
                     adjustment_duration = $13,
                     unmatched = $14,
                     ringba_inbound_call_id = $15,
+                    original_payout = $16,
+                    original_revenue = $17,
                     updated_at = NOW()
-                  WHERE caller_id = $16 
-                    AND date_of_call = $17
-                    AND category = $18
+                  WHERE caller_id = $18 
+                    AND date_of_call = $19
+                    AND category = $20
                   RETURNING id;
                 `;
                 await client.query(updateQuery, [
@@ -280,6 +322,8 @@ export const dbOps = (config) => {
                   call.adjustmentDuration || null,
                   call.unmatched || false,
                   call.ringbaInboundCallId || null,
+                  call.originalPayout !== undefined ? call.originalPayout : null,
+                  call.originalRevenue !== undefined ? call.originalRevenue : null,
                   call.callerId,
                   correctedTimestamp,
                   call.category || 'STATIC'
@@ -293,9 +337,10 @@ export const dbOps = (config) => {
                     city_state, zip_code, screen_duration, post_screen_duration,
                     total_duration, assessment, classification,
                     adjustment_time, adjustment_amount, adjustment_classification,
-                    adjustment_duration, unmatched, ringba_inbound_call_id, created_at
+                    adjustment_duration, unmatched, ringba_inbound_call_id,
+                    original_payout, original_revenue, created_at
                   )
-                  VALUES ($1, $2, $3, $4, $5, $6, $7, $8, $9, $10, $11, $12, $13, $14, $15, $16, $17, $18, NOW())
+                  VALUES ($1, $2, $3, $4, $5, $6, $7, $8, $9, $10, $11, $12, $13, $14, $15, $16, $17, $18, $19, $20, NOW())
                   RETURNING id;
                 `;
                 await client.query(insertQuery, [
@@ -316,13 +361,15 @@ export const dbOps = (config) => {
                   call.adjustmentClassification || null,
                   call.adjustmentDuration || null,
                   call.unmatched || false,
-                  call.ringbaInboundCallId || null
+                  call.ringbaInboundCallId || null,
+                  call.originalPayout !== undefined ? call.originalPayout : null,
+                  call.originalRevenue !== undefined ? call.originalRevenue : null
                 ]);
                 inserted++;
               }
             }
           }
-          
+
           if (timestampCorrected > 0) {
             console.log(`[DB] Timestamp corrections applied to ${timestampCorrected} existing records`);
           }
@@ -362,11 +409,11 @@ export const dbOps = (config) => {
             // Check if adjustment already exists (based on call_sid or combination of fields)
             const checkQuery = `
               SELECT id FROM adjustment_details
-              WHERE call_sid = $1 OR (
-                caller_id = $2 AND time_of_call = $3 AND adjustment_time = $4
-              )
+              WHERE call_sid = $1 OR(
+                  caller_id = $2 AND time_of_call = $3 AND adjustment_time = $4
+                )
               LIMIT 1;
-            `;
+                `;
             const checkResult = await client.query(checkQuery, [
               adj.callSid || '',
               adj.callerId,
@@ -381,13 +428,13 @@ export const dbOps = (config) => {
 
             // Insert new adjustment
             const insertQuery = `
-              INSERT INTO adjustment_details (
-                time_of_call, adjustment_time, campaign_phone, caller_id,
-                duration, call_sid, amount, classification, created_at
-              )
-              VALUES ($1, $2, $3, $4, $5, $6, $7, $8, NOW())
+              INSERT INTO adjustment_details(
+                  time_of_call, adjustment_time, campaign_phone, caller_id,
+                  duration, call_sid, amount, classification, created_at
+                )
+                VALUES($1, $2, $3, $4, $5, $6, $7, $8, NOW())
               RETURNING id;
-            `;
+                `;
             await client.query(insertQuery, [
               adj.timeOfCall,
               adj.adjustmentTime,
@@ -414,7 +461,7 @@ export const dbOps = (config) => {
         throw error;
       }
     },
-    
+
     // Get calls from database for a date range
     async getCallsForDateRange(startDate, endDate, category = null) {
       try {
@@ -425,40 +472,40 @@ export const dbOps = (config) => {
           const year = date.getFullYear();
           const month = String(date.getMonth() + 1).padStart(2, '0');
           const day = String(date.getDate()).padStart(2, '0');
-          return `${year}-${month}-${day}`;
+          return `${year} -${month} -${day} `;
         };
-        
+
         // Generate all dates in the range for comparison
         const datesInRange = [];
         const current = new Date(startDate);
         const end = new Date(endDate);
-        
+
         while (current <= end) {
           datesInRange.push(formatDate(new Date(current)));
           current.setDate(current.getDate() + 1);
         }
-        
+
         // Build query to match any date in the range
         // Match on date part (first 10 characters) of date_of_call
-        const placeholders = datesInRange.map((_, i) => `$${i + 1}`).join(', ');
+        const placeholders = datesInRange.map((_, i) => `$${i + 1} `).join(', ');
         const params = [...datesInRange];
-        
+
         let categoryFilter = '';
         if (category) {
-          categoryFilter = ` AND category = $${params.length + 1}`;
+          categoryFilter = ` AND category = $${params.length + 1} `;
           params.push(category);
         }
-        
+
         const query = `
-          SELECT 
-            id, caller_id, date_of_call, payout, category,
-            original_payout, original_revenue, ringba_inbound_call_id, unmatched,
-            adjustment_amount, adjustment_time, adjustment_classification, adjustment_duration
+                SELECT
+                id, caller_id, date_of_call, payout, category,
+                  original_payout, original_revenue, ringba_inbound_call_id, unmatched,
+                  adjustment_amount, adjustment_time, adjustment_classification, adjustment_duration
           FROM elocal_call_data
           WHERE SUBSTRING(date_of_call, 1, 10) = ANY(ARRAY[${placeholders}])${categoryFilter}
           ORDER BY caller_id, date_of_call
-        `;
-        
+                  `;
+
         const result = await pool.query(query, params);
         return result.rows || [];
       } catch (error) {
@@ -466,20 +513,20 @@ export const dbOps = (config) => {
         throw error;
       }
     },
-    
+
     // Update original payout/revenue for a call
     async updateOriginalPayout(callId, originalPayout, originalRevenue, ringbaInboundCallId) {
       try {
         const query = `
           UPDATE elocal_call_data
-          SET 
-            original_payout = $1,
-            original_revenue = $2,
-            ringba_inbound_call_id = COALESCE($3, ringba_inbound_call_id),
-            updated_at = NOW()
+                SET
+                original_payout = $1,
+                  original_revenue = $2,
+                  ringba_inbound_call_id = COALESCE($3, ringba_inbound_call_id),
+                  updated_at = NOW()
           WHERE id = $4
           RETURNING id;
-        `;
+                `;
         const result = await pool.query(query, [
           originalPayout,
           originalRevenue,
@@ -492,16 +539,16 @@ export const dbOps = (config) => {
         throw error;
       }
     },
-    
+
     // Get call by ID (for fetching current payout before update)
     async getCallById(callId) {
       try {
         const query = `
           SELECT id, caller_id, date_of_call, payout, category, unmatched,
-                 adjustment_amount, adjustment_time, adjustment_classification, adjustment_duration
+                  adjustment_amount, adjustment_time, adjustment_classification, adjustment_duration
           FROM elocal_call_data
           WHERE id = $1
-        `;
+                  `;
         const result = await pool.query(query, [callId]);
         return result.rows[0] || null;
       } catch (error) {
@@ -509,39 +556,39 @@ export const dbOps = (config) => {
         throw error;
       }
     },
-    
+
     // Update ringba_inbound_call_id for a call (or batch of calls)
     async updateRingbaInboundCallId(matches) {
       if (!matches || matches.length === 0) {
         return { updated: 0 };
       }
-      
+
       try {
         let updated = 0;
         const client = await pool.connect();
         try {
           await client.query('BEGIN');
-          
+
           for (const match of matches) {
             const query = `
               UPDATE elocal_call_data
-              SET 
+                SET
                 ringba_inbound_call_id = COALESCE($1, ringba_inbound_call_id),
-                updated_at = NOW()
+                  updated_at = NOW()
               WHERE id = $2
-                AND (ringba_inbound_call_id IS NULL OR ringba_inbound_call_id != $1)
+                AND(ringba_inbound_call_id IS NULL OR ringba_inbound_call_id != $1)
               RETURNING id;
-            `;
+                `;
             const result = await client.query(query, [
               match.ringbaInboundCallId,
               match.elocalCallId
             ]);
-            
+
             if (result.rows.length > 0) {
               updated++;
             }
           }
-          
+
           await client.query('COMMIT');
           return { updated };
         } catch (error) {
@@ -555,23 +602,23 @@ export const dbOps = (config) => {
         throw error;
       }
     },
-    
+
     // Update existing call with adjustment (only payout and adjustment fields)
     async updateCallWithAdjustment(callId, adjustmentData) {
       try {
         const query = `
           UPDATE elocal_call_data
-          SET 
-            payout = $1,
-            adjustment_time = $2,
-            adjustment_amount = $3,
-            adjustment_classification = $4,
-            adjustment_duration = $5,
-            unmatched = $6,
-            updated_at = NOW()
+                SET
+                payout = $1,
+                  adjustment_time = $2,
+                  adjustment_amount = $3,
+                  adjustment_classification = $4,
+                  adjustment_duration = $5,
+                  unmatched = $6,
+                  updated_at = NOW()
           WHERE id = $7
           RETURNING id;
-        `;
+                `;
         const result = await pool.query(query, [
           adjustmentData.payout || 0,
           adjustmentData.adjustmentTime || null,
@@ -587,51 +634,51 @@ export const dbOps = (config) => {
         throw error;
       }
     },
-    
+
     // Insert Ringba calls in batch (upsert by inbound_call_id)
     async insertRingbaCallsBatch(ringbaCalls) {
       if (!ringbaCalls || ringbaCalls.length === 0) {
         return { inserted: 0, updated: 0, skipped: 0 };
       }
-      
+
       try {
         let inserted = 0;
         let updated = 0;
         let skipped = 0;
-        
+
         // Process in batches of 500 to avoid query size limits
         const batchSize = 500;
         for (let i = 0; i < ringbaCalls.length; i += batchSize) {
           const batch = ringbaCalls.slice(i, i + batchSize);
-          
+
           for (const call of batch) {
             try {
               // Check if call already exists
               const checkQuery = `
                 SELECT id FROM ringba_calls 
                 WHERE inbound_call_id = $1
-              `;
+                  `;
               const checkResult = await pool.query(checkQuery, [call.inboundCallId]);
-              
+
               if (checkResult.rows.length > 0) {
                 // Update existing record
                 const updateQuery = `
                   UPDATE ringba_calls
-                  SET 
-                    call_date_time = $1,
-                    caller_id = $2,
-                    caller_id_e164 = $3,
-                    inbound_phone_number = $4,
-                    payout_amount = $5,
-                    revenue_amount = $6,
-                    call_duration = $7,
-                    target_id = $8,
-                    target_name = $9,
-                    campaign_name = $10,
-                    publisher_name = $11,
-                    updated_at = NOW()
+                SET
+                call_date_time = $1,
+                  caller_id = $2,
+                  caller_id_e164 = $3,
+                  inbound_phone_number = $4,
+                  payout_amount = $5,
+                  revenue_amount = $6,
+                  call_duration = $7,
+                  target_id = $8,
+                  target_name = $9,
+                  campaign_name = $10,
+                  publisher_name = $11,
+                  updated_at = NOW()
                   WHERE inbound_call_id = $12
-                `;
+                  `;
                 await pool.query(updateQuery, [
                   call.callDt || '',
                   call.callerId || null,
@@ -650,13 +697,13 @@ export const dbOps = (config) => {
               } else {
                 // Insert new record
                 const insertQuery = `
-                  INSERT INTO ringba_calls (
+                  INSERT INTO ringba_calls(
                     inbound_call_id, call_date_time, caller_id, caller_id_e164,
                     inbound_phone_number, payout_amount, revenue_amount, call_duration,
                     target_id, target_name, campaign_name, publisher_name
                   )
-                  VALUES ($1, $2, $3, $4, $5, $6, $7, $8, $9, $10, $11, $12)
-                `;
+                VALUES($1, $2, $3, $4, $5, $6, $7, $8, $9, $10, $11, $12)
+                  `;
                 await pool.query(insertQuery, [
                   call.inboundCallId,
                   call.callDt || '',
@@ -674,19 +721,19 @@ export const dbOps = (config) => {
                 inserted++;
               }
             } catch (error) {
-              console.warn(`[WARN] Failed to insert/update Ringba call ${call.inboundCallId}:`, error.message);
+              console.warn(`[WARN] Failed to insert / update Ringba call ${call.inboundCallId}: `, error.message);
               skipped++;
             }
           }
         }
-        
+
         return { inserted, updated, skipped };
       } catch (error) {
         console.error('[ERROR] Failed to insert Ringba calls batch:', error);
         throw error;
       }
     },
-    
+
     // Expose pool for direct access if needed
     get pool() {
       return pool;

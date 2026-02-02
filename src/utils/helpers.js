@@ -30,18 +30,18 @@ export const processCampaignCalls = (rawCalls) => {
     // Normalize date+time to ISO format (YYYY-MM-DDTHH:mm:ss) before creating key
     // Use FULL timestamp for deduplication to allow multiple calls per day
     let normalizedDateTime = normalizeDateTime(call.dateOfCall) || call.dateOfCall || '';
-    
+
     // If normalization failed or returned empty, skip this call
     if (!normalizedDateTime) {
       console.warn(`[WARN] Skipping call with invalid date: ${call.dateOfCall} for caller ${call.callerId}`);
       continue;
     }
-    
+
     // If eLocal doesn't provide seconds, default to :00
     // But if multiple calls have the same timestamp down to the minute, we need to differentiate them
     // Check if we already have a call with this exact timestamp
     const baseKey = `${call.callerId}|${normalizedDateTime}|${call.category || 'STATIC'}`;
-    
+
     // Check if we've already processed a call with this exact timestamp
     // If so, increment the sequence counter and modify the timestamp
     let count = timestampCounts.get(baseKey) || 0;
@@ -56,16 +56,16 @@ export const processCampaignCalls = (rawCalls) => {
         normalizedDateTime = `${datePart}T${hours}:${minutes}:${newSeconds}`;
       }
     }
-    
+
     // Increment counter for this base timestamp (for next call with same timestamp)
     timestampCounts.set(baseKey, count + 1);
-    
+
     // Use full normalized timestamp (with sequence if needed) for deduplication key
     const key = `${call.callerId}|${normalizedDateTime}|${call.category || 'STATIC'}`;
-    
+
     if (!seen.has(key)) {
       seen.set(key, true);
-      
+
       // Normalize the call object with standardized date+time format
       const processedCall = {
         callerId: call.callerId || '',
