@@ -82,17 +82,17 @@ const parseDate = (dateStr) => {
  */
 const createDateRangeForDate = (dateObj) => {
   const { year, month, day } = dateObj;
-  
+
   // Create Date objects using UTC to avoid timezone issues
   const startDate = new Date(Date.UTC(year, month - 1, day, 0, 0, 0, 0));
   const endDate = new Date(Date.UTC(year, month - 1, day, 23, 59, 59, 999));
-  
+
   // Format dates
   const startDateFormatted = `${String(month).padStart(2, '0')}/${String(day).padStart(2, '0')}/${year}`;
   const endDateFormatted = `${String(month).padStart(2, '0')}/${String(day).padStart(2, '0')}/${year}`;
   const startDateURL = `${year}-${String(month).padStart(2, '0')}-${String(day).padStart(2, '0')}`;
   const endDateURL = `${year}-${String(month).padStart(2, '0')}-${String(day).padStart(2, '0')}`;
-  
+
   return {
     startDate,
     endDate,
@@ -131,7 +131,7 @@ const showUsage = () => {
  */
 const validateConfig = (config) => {
   const errors = [];
-  
+
   if (!config.dbHost) {
     errors.push('Database host (DB_HOST or POSTGRES_HOST) is required');
   }
@@ -144,7 +144,7 @@ const validateConfig = (config) => {
   if (!config.dbName) {
     errors.push('Database name (DB_NAME or POSTGRES_DB_NAME) is required');
   }
-  
+
   return errors;
 };
 
@@ -153,23 +153,23 @@ const validateConfig = (config) => {
  */
 const main = async () => {
   const args = process.argv.slice(2);
-  
+
   // Check for help flag
   if (args.includes('--help') || args.includes('-h') || args.length === 0) {
     showUsage();
     process.exit(0);
   }
-  
+
   // Parse date (first argument)
   const dateStr = args[0];
   const dateObj = parseDate(dateStr);
-  
+
   if (!dateObj) {
     console.error(`❌ Error: Invalid date format: ${dateStr}`);
     showUsage();
     process.exit(1);
   }
-  
+
   // Parse category (second argument, default to STATIC)
   const category = (args[1] || 'STATIC').toUpperCase();
   if (category !== 'STATIC' && category !== 'API') {
@@ -177,7 +177,7 @@ const main = async () => {
     showUsage();
     process.exit(1);
   }
-  
+
   // Build config
   const config = {
     elocalBaseUrl: process.env.ELOCAL_BASE_URL || 'https://elocal.com',
@@ -190,7 +190,7 @@ const main = async () => {
     ringbaAccountId: process.env.RINGBA_ACCOUNT_ID,
     ringbaApiToken: process.env.RINGBA_API_TOKEN
   };
-  
+
   // Validate config
   const configErrors = validateConfig(config);
   if (configErrors.length > 0) {
@@ -200,10 +200,10 @@ const main = async () => {
     console.error('Please set the required environment variables in your .env file.');
     process.exit(1);
   }
-  
+
   // Create date range for the specified date
   const dateRange = createDateRangeForDate(dateObj);
-  
+
   // Show configuration
   console.log('');
   console.log('======================================================================');
@@ -215,19 +215,19 @@ const main = async () => {
   console.log(`Date Range: ${getDateRangeDescription(dateRange)}`);
   console.log('======================================================================');
   console.log('');
-  
+
   try {
     const startTime = Date.now();
-    
+
     let result;
     if (category === 'API') {
       result = await scrapeCurrentDayDataAPI(config, dateRange);
     } else {
       result = await scrapeCurrentDayData(config, dateRange);
     }
-    
+
     const duration = ((Date.now() - startTime) / 1000).toFixed(2);
-    
+
     console.log('');
     console.log('======================================================================');
     console.log(`✅ Service completed successfully in ${duration}s`);
@@ -241,9 +241,9 @@ const main = async () => {
     console.log(`Calls Inserted: ${result.databaseResults.callsInserted}`);
     console.log(`Calls Updated: ${result.databaseResults.callsUpdated}`);
     console.log('======================================================================');
-    
+
     process.exit(0);
-    
+
   } catch (error) {
     console.error('');
     console.error('======================================================================');
@@ -256,7 +256,7 @@ const main = async () => {
       console.error(error.stack);
     }
     console.error('======================================================================');
-    
+
     process.exit(1);
   }
 };

@@ -25,7 +25,20 @@ export const getElocalCalls = (apiKey, uuid) => (dateRange, options = {}) =>
 
       // Add query parameters (API v2 requires YYYY-MM-DD)
       url.searchParams.append('start_date', dateRange.startDateURL);
-      url.searchParams.append('end_date', dateRange.endDateURL);
+
+      // IMPORTANT: Extend end_date by one day for inclusive fetching
+      // eLocal API does not include calls on the end_date itself, so we must add 1 day
+      // This matches the behavior in elocal-api-fetch.js
+      const endDateParts = dateRange.endDateURL.split('-');
+      const endDateObj = new Date(Date.UTC(
+        parseInt(endDateParts[0]),
+        parseInt(endDateParts[1]) - 1,
+        parseInt(endDateParts[2])
+      ));
+      endDateObj.setUTCDate(endDateObj.getUTCDate() + 1);
+      const extendedEndDate = endDateObj.toISOString().split('T')[0];
+
+      url.searchParams.append('end_date', extendedEndDate);
       url.searchParams.append('sortBy', options.sortBy || 'callStartTime');
       url.searchParams.append('sortOrder', options.sortOrder || 'desc');
 
