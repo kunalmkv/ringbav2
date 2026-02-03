@@ -12,7 +12,7 @@ const __dirname = path.dirname(fileURLToPath(import.meta.url));
 
 // Configuration
 const CAMPAIGN_NAME_FILTER = "Appliance Repair";
-const WEBHOOK_URL = 'https://insidefi.co/assembly/audio/send/urls';
+const WEBHOOK_URL = 'https://insidefi.co/assembly/ringba/call-recording/submit';
 
 // Field mapping (Output Key -> Ringba UI Label/Description or known key)
 const TARGET_MAPPING = {
@@ -234,18 +234,22 @@ const runBackfill = async () => {
 
                 if (response.ok) {
                     successCount++;
-                    if (successCount % 10 === 0) process.stdout.write('.'); // Progress indicator
+                    console.log(`\n[${successCount}/${mappedCalls.length - skippedCount}] Successfully posted record ${index + 1}`);
                 } else {
                     failCount++;
                     const errorText = await response.text();
-                    console.error(`\nFailed to post record ${index + 1}: ${response.status} ${response.statusText} - ${errorText}`);
+                    console.error(`\n[FAILED] Record ${index + 1}: ${response.status} ${response.statusText} - ${errorText}`);
                 }
             } catch (err) {
                 failCount++;
-                console.error(`\nError posting record ${index + 1}:`, err.message);
+                console.error(`\n[ERROR] Record ${index + 1}:`, err.message);
             }
-            // Small delay to be nice to the server
-            await new Promise(r => setTimeout(r, 50));
+
+            // 20-second delay to prevent server overload
+            if (index < mappedCalls.length - 1) { // Don't wait after the last record
+                console.log(`[DELAY] Waiting 20 seconds before next request... (${index + 2}/${mappedCalls.length} pending)`);
+                await new Promise(r => setTimeout(r, 20000));
+            }
         }
 
         console.log('');
