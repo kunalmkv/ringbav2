@@ -183,20 +183,36 @@ const matchCall = (elocalCall, ringbaCall, windowMinutes = 30, durationTolerance
   }
 
   // 3. Match call duration (if both have duration data)
-  const elocalDuration = Number(elocalCall.total_duration || 0);
-  const ringbaDuration = Number(ringbaCall.call_duration || 0);
+  // FIX: Handle N/A, null, or undefined duration properly
+  // Don't treat them as 0 - treat them as "no duration data available"
+  const elocalDurationRaw = elocalCall.total_duration;
+  const hasElocalDuration = elocalDurationRaw !== null &&
+    elocalDurationRaw !== undefined &&
+    elocalDurationRaw !== 'N/A' &&
+    elocalDurationRaw !== '';
+
+  const ringbaDurationRaw = ringbaCall.call_duration;
+  const hasRingbaDuration = ringbaDurationRaw !== null &&
+    ringbaDurationRaw !== undefined &&
+    ringbaDurationRaw !== 'N/A' &&
+    ringbaDurationRaw !== '';
+
+  const elocalDuration = hasElocalDuration ? Number(elocalDurationRaw) : 0;
+  const ringbaDuration = hasRingbaDuration ? Number(ringbaDurationRaw) : 0;
   const durationDiff = Math.abs(elocalDuration - ringbaDuration);
 
   // If both have duration data, check if they match within tolerance
   // This helps distinguish between multiple calls from the same caller
+  // FIX: Only validate duration if BOTH calls have valid duration data
   let durationMatch = true;
-  if (elocalDuration > 0 && ringbaDuration > 0) {
+  if (hasElocalDuration && hasRingbaDuration && elocalDuration > 0 && ringbaDuration > 0) {
     if (durationDiff > durationTolerance) {
       // Duration doesn't match - this is likely a different call
       return null;
     }
     durationMatch = true;
   }
+  // If either call lacks duration data, skip duration check entirely (allow match)
 
   // Calculate match score (lower is better)
   // Prioritize: duration match > time match
@@ -314,6 +330,8 @@ const getRingbaCallsForMatching = async (db, startDate, endDate) => {
 };
 
 // Detect changes and prepare update list
+// FIX: Use best-score matching instead of first-match-wins
+// Prioritize calls with higher payouts to ensure valuable matches aren't missed
 const detectChanges = (elocalCalls, ringbaCalls) => {
   const updates = [];
   const unmatched = [];
@@ -344,10 +362,9 @@ const detectChanges = (elocalCalls, ringbaCalls) => {
     callsByCaller.get(callerE164).push(ringbaCall);
   }
 
-  // Track which Ringba calls have been matched
-  const matchedRingbaIds = new Set();
+  // PHASE 1: Collect ALL possible matches for ALL eLocal calls
+  const allPossibleMatches = [];
 
-  // Match each eLocal call
   for (const elocalCall of elocalCalls) {
     const elocalCategory = elocalCall.category || 'STATIC';
     const callerE164 = toE164(elocalCall.caller_id);
@@ -371,40 +388,68 @@ const detectChanges = (elocalCalls, ringbaCalls) => {
       continue;
     }
 
-    // Find best match
-    let bestMatch = null;
-    let bestScore = Infinity;
-
+    // Find ALL possible matches for this eLocal call
     for (const ringbaCall of candidateRingbaCalls) {
-      if (matchedRingbaIds.has(ringbaCall.id)) {
-        continue; // Already matched
-      }
-
       const match = matchCall(elocalCall, ringbaCall);
-      if (match && match.matchScore < bestScore) {
-        bestMatch = match;
-        bestScore = match.matchScore;
+      if (match) {
+        const elocalPayout = Number(elocalCall.payout || 0);
+
+        // Calculate priority score (higher is better)
+        // Primary: Payout amount (calls with money are more important)
+        // Secondary: Match score (lower time diff is better, so invert it)
+        // Tertiary: Duration match quality
+        const priorityScore =
+          (elocalPayout * 1000000) +           // Payout in millions (e.g., $21 = 21,000,000 priority)
+          (1000 / (match.matchScore + 1)) +    // Inverse of time diff (lower time = higher priority)
+          (match.durationMatch ? 100 : 0);     // Bonus for duration match
+
+        allPossibleMatches.push({
+          elocalCall,
+          ringbaCall,
+          matchScore: match.matchScore,
+          timeDiff: match.timeDiff,
+          durationDiff: match.durationDiff,
+          durationMatch: match.durationMatch,
+          elocalPayout,
+          priorityScore
+        });
       }
     }
+  }
 
-    if (!bestMatch) {
-      unmatched.push({ elocalCall, reason: 'No matching Ringba call found (time/duration mismatch)' });
+  // PHASE 2: Sort all matches by priority score (highest first)
+  // This ensures calls with higher payouts get matched first
+  allPossibleMatches.sort((a, b) => b.priorityScore - a.priorityScore);
+
+  // PHASE 3: Assign matches in priority order, respecting one-to-one constraint
+  const matchedRingbaIds = new Set();
+  const matchedElocalIds = new Set();
+  const matchedPairs = [];
+
+  for (const match of allPossibleMatches) {
+    const elocalId = match.elocalCall.id;
+    const ringbaId = match.ringbaCall.id;
+
+    // Skip if either call is already matched
+    if (matchedElocalIds.has(elocalId) || matchedRingbaIds.has(ringbaId)) {
       continue;
     }
 
-    matchedRingbaIds.add(bestMatch.ringbaCall.id);
+    // This is the best available match for this pair - assign it
+    matchedElocalIds.add(elocalId);
+    matchedRingbaIds.add(ringbaId);
+    matchedPairs.push(match);
 
-    // Track all matched calls (for updating ringba_inbound_call_id in database)
-    // This includes calls that need updates AND calls that are already in sync
+    // Track for ringba_inbound_call_id update
     matched.push({
-      elocalCallId: elocalCall.id,
-      ringbaInboundCallId: bestMatch.ringbaCall.inbound_call_id
+      elocalCallId: elocalId,
+      ringbaInboundCallId: match.ringbaCall.inbound_call_id
     });
 
     // Check if payout/revenue needs updating
-    const elocalPayout = Number(elocalCall.payout || 0);
-    const ringbaPayout = Number(bestMatch.ringbaCall.payout_amount || 0);
-    const ringbaRevenue = Number(bestMatch.ringbaCall.revenue_amount || 0);
+    const elocalPayout = match.elocalPayout;
+    const ringbaPayout = Number(match.ringbaCall.payout_amount || 0);
+    const ringbaRevenue = Number(match.ringbaCall.revenue_amount || 0);
 
     // Skip if eLocal payout is 0 and Ringba payout is also 0 (no change needed)
     // But we still track it in matched[] for ringba_inbound_call_id update
@@ -422,9 +467,9 @@ const detectChanges = (elocalCalls, ringbaCalls) => {
 
     if (payoutDiff > 0.01 || revenueDiff > 0.01) {
       updates.push({
-        elocalCallId: elocalCall.id,
-        ringbaInboundCallId: bestMatch.ringbaCall.inbound_call_id,
-        targetId: bestMatch.ringbaCall.target_id || null, // Include target ID for API call
+        elocalCallId: match.elocalCall.id,
+        ringbaInboundCallId: match.ringbaCall.inbound_call_id,
+        targetId: match.ringbaCall.target_id || null, // Include target ID for API call
         currentPayout: ringbaPayout,
         currentRevenue: ringbaRevenue,
         newPayout: newPayout,
@@ -432,10 +477,19 @@ const detectChanges = (elocalCalls, ringbaCalls) => {
         payoutDiff: payoutDiff,
         revenueDiff: revenueDiff,
         matchInfo: {
-          timeDiff: bestMatch.timeDiff,
-          durationMatch: bestMatch.durationMatch
+          timeDiff: match.timeDiff,
+          durationMatch: match.durationMatch
         }
       });
+    }
+  }
+
+  // PHASE 4: Mark remaining eLocal calls (that couldn't find matches) as unmatched
+  // Only if they weren't already added to unmatched in Phase 1
+  const alreadyUnmatchedIds = new Set(unmatched.map(u => u.elocalCall.id));
+  for (const elocalCall of elocalCalls) {
+    if (!matchedElocalIds.has(elocalCall.id) && !alreadyUnmatchedIds.has(elocalCall.id)) {
+      unmatched.push({ elocalCall, reason: 'No matching Ringba call found (time/duration mismatch)' });
     }
   }
 
